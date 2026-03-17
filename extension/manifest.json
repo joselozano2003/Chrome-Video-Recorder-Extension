@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Chrome Tab Recorder",
+  "version": "1.0.0",
+  "description": "Record browser tabs, transcribe audio, and create Google Docs — automatically.",
+
+  "permissions": [
+    "tabCapture",
+    "storage",
+    "identity",
+    "tabs",
+    "offscreen",
+    "notifications"
+  ],
+
+  "host_permissions": [
+    "https://www.googleapis.com/*",
+    "https://api.assemblyai.com/*",
+    "http://localhost:3000/*"
+  ],
+
+  "oauth2": {
+    "client_id": "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/drive.file",
+      "https://www.googleapis.com/auth/documents"
+    ]
+  },
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Chrome Tab Recorder",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

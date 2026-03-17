@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Environment secrets — NEVER commit these
+.env
+*.env.local
+
+# Build outputs
+dist/
+build/
+
+# Large media files — stored in IndexedDB / Drive, not git
+*.mp4
+*.webm
+*.mp3
+*.wav
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
+
+# Google credentials
+service-account.json
+*-credentials.json
+token.json
