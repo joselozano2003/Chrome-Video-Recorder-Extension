@@ -51,9 +51,9 @@ async function startRecording(streamId, options = {}) {
       mandatory: {
         chromeMediaSource: 'tab',
         chromeMediaSourceId: streamId,
-        maxWidth:  1920,
-        maxHeight: 1080,
-        maxFrameRate: 15,
+        maxWidth:  2560,
+        maxHeight: 1440,
+        maxFrameRate: 24,
       },
     },
   });
