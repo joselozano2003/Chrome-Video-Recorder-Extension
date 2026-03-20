@@ -8,9 +8,11 @@
     "tabCapture",
     "storage",
     "identity",
+    "identity.email",
     "tabs",
     "offscreen",
-    "notifications"
+    "notifications",
+    "alarms"
   ],
 
   "host_permissions": [
@@ -20,7 +22,7 @@
   ],
 
   "oauth2": {
-    "client_id": "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
+    "client_id": "409823534577-ekfht6m6ri59s9880j7mi9rtqhasr1nq.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/drive.file",
       "https://www.googleapis.com/auth/documents"
@@ -28,7 +30,8 @@
   },
 
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
 
   "action": {

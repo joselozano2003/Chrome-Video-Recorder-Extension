@@ -35,6 +35,7 @@ export async function startUpload(jobId) {
   try {
     const blob = await getRecording(job.recordingId);
     if (!blob) throw new Error('Recording blob not found in IndexedDB');
+    console.log(`[upload] Blob size: ${(blob.size / 1024 / 1024).toFixed(2)} MB, type: ${blob.type}`);
 
     const token = await getAuthToken();
     const folderId = await ensureDriveFolder(token);
@@ -244,6 +245,10 @@ async function notifyBackend(job, retryCount = 0) {
   const RETRY_INTERVAL_MS   = 60_000;
 
   try {
+    // Get a fresh token so the backend can download the file from Drive.
+    // Tokens are valid for ~1 hour — enough time for the worker to process the job.
+    const accessToken = await getAuthToken();
+
     const res = await fetch(`${BACKEND_URL}/jobs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -251,6 +256,7 @@ async function notifyBackend(job, retryCount = 0) {
         jobId:       job.id,
         driveFileId: job.driveFileId,
         userEmail:   job.userEmail || '',
+        accessToken,
       }),
     });
 

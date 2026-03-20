@@ -29,11 +29,12 @@ function writeJobs(jobs) {
  * @param {string} recordingId — IndexedDB key for the video blob
  * @returns {Object} the new job
  */
-export async function createJob(recordingId) {
+export async function createJob(recordingId, userEmail = '') {
   const jobs = await readJobs();
   const job = {
     id:             crypto.randomUUID(),
     recordingId,
+    userEmail,
     status:         'pending',
     createdAt:      Date.now(),
     retryCount:     0,

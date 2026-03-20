@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Microphone Permission</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      background: #1a1a2e;
+      color: #e0e0e0;
+    }
+    h2 { margin-bottom: 8px; }
+    p  { color: #aaa; margin-bottom: 24px; text-align: center; max-width: 360px; }
+    button {
+      padding: 12px 28px;
+      background: #e53e3e;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    button:hover { background: #c53030; }
+    #msg { margin-top: 16px; color: #aaa; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h2>Microphone Access</h2>
+  <p>Chrome Tab Recorder needs microphone access to include your voice in recordings.</p>
+  <button id="btn">Allow Microphone</button>
+  <div id="msg"></div>
+  <script src="permission.js" type="module"></script>
+</body>
+</html>

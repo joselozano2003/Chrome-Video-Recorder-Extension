@@ -3,7 +3,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { createBullBoard } from '@bull-board/api';
-import { BullMQAdapter }   from '@bull-board/api/bullMQAdapter.js';
+import { BullMQAdapter }   from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter }  from '@bull-board/express';
 
 import { transcriptionQueue } from './workers/transcription.js';

@@ -9,7 +9,7 @@ const router = Router();
 // Called by the extension after a successful Drive upload.
 // Enqueues a transcription job in BullMQ.
 router.post('/', async (req, res) => {
-  const { jobId, driveFileId, userEmail } = req.body;
+  const { jobId, driveFileId, userEmail, accessToken } = req.body;
 
   if (!jobId || !driveFileId) {
     return res.status(400).json({ error: 'jobId and driveFileId are required' });
@@ -18,7 +18,7 @@ router.post('/', async (req, res) => {
   try {
     await transcriptionQueue.add(
       'transcribe',
-      { jobId, driveFileId, userEmail: userEmail || '' },
+      { jobId, driveFileId, userEmail: userEmail || '', accessToken },
       {
         jobId,           // use extension jobId so idempotent re-queues are safe
         attempts: 3,

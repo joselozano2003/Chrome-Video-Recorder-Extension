@@ -1,9 +1,9 @@
-// backend/src/services/email.js — SendGrid email client
-// Phase 7 will fill in the implementation.
+// backend/src/services/email.js — Resend email client
 
-const SENDGRID_URL = 'https://api.sendgrid.com/v3/mail/send';
-const API_KEY      = () => process.env.SENDGRID_API_KEY;
-const FROM_EMAIL   = () => process.env.FROM_EMAIL || 'noreply@example.com';
+import { Resend } from 'resend';
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+const FROM   = process.env.FROM_EMAIL || 'onboarding@resend.dev';
 
 /**
  * Send a completion email with links to the Drive recording and transcript Doc.
@@ -13,6 +13,26 @@ const FROM_EMAIL   = () => process.env.FROM_EMAIL || 'noreply@example.com';
  * @param {string} recordedAt — ISO timestamp of recording
  */
 export async function sendCompletionEmail(to, driveUrl, docUrl, recordedAt) {
-  // TODO (Phase 7): implement
-  throw new Error('Not implemented yet');
+  console.log(`[email] Sending completion email to ${to}…`);
+  const date = new Date(recordedAt).toLocaleString('en-US', {
+    month: 'long', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  });
+
+  const { error } = await resend.emails.send({
+    from: 'Acme <onboarding@resend.dev>',
+    to,
+    subject: `Your recording transcript is ready — ${date}`,
+    html: `
+      <p>Hi,</p>
+      <p>Your recording from <strong>${date}</strong> has been transcribed.</p>
+      <ul>
+        <li><a href="${docUrl}">View Transcript (Google Doc)</a></li>
+        <li><a href="${driveUrl}">View Recording (Google Drive)</a></li>
+      </ul>
+      <p>— Tab Recorder</p>
+    `,
+  });
+
+  if (error) throw new Error(`Resend error: ${error.message}`);
 }

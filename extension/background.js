@@ -1,143 +1,181 @@
 // background.js — Manifest V3 Service Worker
 // IMPORTANT: Service workers can be stopped by Chrome at any time.
-// Never rely on in-memory state. Always persist to chrome.storage.local or IndexedDB.
+// Never rely on in-memory state — always persist to chrome.storage.local or IndexedDB.
+//
+// MV3 recording architecture:
+//   1. background.js calls chrome.tabCapture.getMediaStreamId() → stream ID
+//   2. background.js creates an offscreen document
+//   3. offscreen.js receives the stream ID, calls getUserMedia, runs MediaRecorder
 
-import { createJob, updateJob, getJobs } from './utils/queue.js';
-import { saveRecording } from './utils/db.js';
+import { getJobs, createJob, updateJob } from './utils/queue.js';
 import { startUpload } from './utils/upload.js';
 
-// ─── State (non-persistent — only used while service worker is alive) ──────────
-let mediaRecorder = null;
-let recordingChunks = [];
-let activeStream = null;
-let activeTabId = null;
+const BACKEND_URL = 'http://localhost:3000';
 
-// ─── Startup: Resume any pending jobs ─────────────────────────────────────────
-chrome.runtime.onStartup.addListener(resumePendingJobs);
-chrome.runtime.onInstalled.addListener(resumePendingJobs);
+const OFFSCREEN_URL = chrome.runtime.getURL('offscreen.html');
+
+// ─── Startup: Resume uploads + start backend polling alarm ─────────────────────
+chrome.runtime.onStartup.addListener(() => { resumePendingJobs(); setupAlarm(); });
+chrome.runtime.onInstalled.addListener(() => { resumePendingJobs(); setupAlarm(); });
+
+function setupAlarm() {
+  chrome.alarms.create('poll-backend', { periodInMinutes: 1 });
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'poll-backend') pollBackendJobs();
+});
+
+// ─── Poll backend for queued/transcribing jobs ──────────────────────────────────
+async function pollBackendJobs() {
+  const jobs = await getJobs();
+  const pending = jobs.filter(j => j.status === 'queued' || j.status === 'transcribing');
+  if (!pending.length) return;
+
+  for (const job of pending) {
+    try {
+      const res = await fetch(`${BACKEND_URL}/jobs/${job.id}`);
+      if (!res.ok) continue;
+
+      const data = await res.json();
+
+      if (data.state === 'active') {
+        await updateJob(job.id, { status: 'transcribing' });
+      } else if (data.state === 'completed' && data.returnValue) {
+        await updateJob(job.id, {
+          status:       'completed',
+          transcriptId: data.returnValue.transcriptId ?? null,
+          docId:        data.returnValue.docId  ?? null,
+          docUrl:       data.returnValue.docUrl ?? null,
+        });
+        console.log(`[background] Job ${job.id} completed — doc: ${data.returnValue.docUrl}`);
+      } else if (data.state === 'failed') {
+        await updateJob(job.id, { status: 'failed', error: data.failReason || 'Backend job failed' });
+      }
+    } catch {
+      // Backend unreachable — will retry next alarm tick
+    }
+  }
+}
 
 async function resumePendingJobs() {
   const jobs = await getJobs();
-  const resumable = jobs.filter(j =>
-    j.status === 'pending' || j.status === 'uploading'
-  );
-  for (const job of resumable) {
-    console.log(`[background] Resuming job ${job.id} (status: ${job.status})`);
-    startUpload(job.id);
+  for (const job of jobs) {
+    if (job.status === 'pending' || job.status === 'uploading') {
+      console.log(`[background] Resuming job ${job.id} (${job.status})`);
+      startUpload(job.id);
+    }
   }
 }
 
 // ─── Message Router ────────────────────────────────────────────────────────────
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message.type) {
     case 'start-recording':
-      handleStartRecording(message, sendResponse);
-      return true; // keep channel open for async response
+      handleStartRecording(message).then(sendResponse);
+      return true;
 
     case 'stop-recording':
-      handleStopRecording(sendResponse);
+      handleStopRecording().then(sendResponse);
+      return true;
+
+    case 'retry-job':
+      startUpload(message.jobId).then(() => sendResponse({ success: true }));
       return true;
 
     case 'get-status':
-      sendResponse({ recording: mediaRecorder?.state === 'recording' });
-      break;
-
-    default:
-      console.warn('[background] Unknown message type:', message.type);
+      isOffscreenAlive().then(alive => sendResponse({ recording: alive }));
+      pollBackendJobs(); // refresh job statuses whenever popup opens
+      return true;
   }
 });
 
 // ─── Start Recording ───────────────────────────────────────────────────────────
-async function handleStartRecording(message, sendResponse) {
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    sendResponse({ success: false, error: 'Already recording' });
-    return;
-  }
-
+async function handleStartRecording(message) {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    activeTabId = tab.id;
+    if (!tab?.id) throw new Error('No active tab found');
 
-    const audioConstraints = {
-      audio: message.systemAudio !== false,
-      video: true,
-    };
-
-    // chrome.tabCapture.capture must be called from an event context
-    chrome.tabCapture.capture(audioConstraints, (stream) => {
-      if (chrome.runtime.lastError || !stream) {
-        sendResponse({ success: false, error: chrome.runtime.lastError?.message || 'Failed to capture tab' });
-        return;
-      }
-
-      activeStream = stream;
-      recordingChunks = [];
-
-      mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'video/webm;codecs=vp9,opus',
-        // chunks every 1 second — critical for memory management
-        videoBitsPerSecond: 2500000,
+    // Get a stream ID — this is the MV3-safe way to do tab capture from a SW
+    const streamId = await new Promise((resolve, reject) => {
+      chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, (id) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve(id);
       });
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          recordingChunks.push(event.data);
-        }
-      };
-
-      mediaRecorder.onerror = (event) => {
-        console.error('[background] MediaRecorder error:', event.error);
-      };
-
-      // 1000ms timeslice — writes chunks continuously instead of one huge blob
-      mediaRecorder.start(1000);
-
-      chrome.action.setBadgeText({ text: 'REC' });
-      chrome.action.setBadgeBackgroundColor({ color: '#FF0000' });
-
-      sendResponse({ success: true });
     });
+
+    // Ensure the offscreen document exists
+    await ensureOffscreen();
+
+    // Tell offscreen.js to open the stream and start MediaRecorder
+    const response = await chrome.runtime.sendMessage({
+      type: 'offscreen-start',
+      streamId,
+      options: {
+        systemAudio: message.systemAudio !== false,
+        mic: message.mic === true,
+      },
+    });
+
+    if (!response?.success) throw new Error(response?.error || 'Offscreen start failed');
+
+    chrome.action.setBadgeText({ text: 'REC' });
+    chrome.action.setBadgeBackgroundColor({ color: '#FF0000' });
+
+    return { success: true };
   } catch (err) {
-    console.error('[background] handleStartRecording error:', err);
-    sendResponse({ success: false, error: err.message });
+    console.error('[background] handleStartRecording:', err);
+    return { success: false, error: err.message };
   }
 }
 
 // ─── Stop Recording ────────────────────────────────────────────────────────────
-async function handleStopRecording(sendResponse) {
-  if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-    sendResponse({ success: false, error: 'Not currently recording' });
-    return;
+async function handleStopRecording() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'offscreen-stop' });
+
+    chrome.action.setBadgeText({ text: '' });
+    await new Promise(r => setTimeout(r, 500)); // let offscreen logs flush
+    await closeOffscreen();
+
+    if (!response?.success) throw new Error(response?.error || 'Offscreen stop failed');
+
+    // Fetch user email (best-effort — empty string if unavailable)
+    const userEmail = await new Promise(resolve => {
+      chrome.identity.getProfileUserInfo({ accountStatus: 'ANY' }, (info) => {
+        resolve(info?.email || '');
+      });
+    });
+
+    // Offscreen doc only saves the blob — job creation and upload happen here
+    // so they run in the service worker context where chrome.storage is always available.
+    const job = await createJob(response.recordingId, userEmail);
+    startUpload(job.id); // fire-and-forget — service worker keeps running
+
+    return { success: true, jobId: job.id };
+  } catch (err) {
+    console.error('[background] handleStopRecording:', err);
+    return { success: false, error: err.message };
   }
+}
 
-  mediaRecorder.onstop = async () => {
-    try {
-      // Stop all tracks to release the tab stream
-      activeStream?.getTracks().forEach(t => t.stop());
-      activeStream = null;
+// ─── Offscreen document helpers ────────────────────────────────────────────────
+async function ensureOffscreen() {
+  const existing = await chrome.offscreen.hasDocument();
+  if (!existing) {
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_URL,
+      reasons: [chrome.offscreen.Reason.USER_MEDIA],
+      justification: 'Record tab audio and video using MediaRecorder',
+    });
+  }
+}
 
-      const blob = new Blob(recordingChunks, { type: 'video/webm' });
-      recordingChunks = [];
+async function closeOffscreen() {
+  const exists = await chrome.offscreen.hasDocument();
+  if (exists) chrome.offscreen.closeDocument();
+}
 
-      const recordingId = crypto.randomUUID();
-      await saveRecording(recordingId, blob);
-      console.log(`[background] Recording saved: ${recordingId} (${blob.size} bytes)`);
-
-      // Create a job record immediately — this persists even if browser closes
-      const job = await createJob(recordingId);
-      console.log(`[background] Job created: ${job.id}`);
-
-      // Kick off upload
-      startUpload(job.id);
-
-      chrome.action.setBadgeText({ text: '' });
-
-      sendResponse({ success: true, jobId: job.id });
-    } catch (err) {
-      console.error('[background] handleStopRecording error:', err);
-      sendResponse({ success: false, error: err.message });
-    }
-  };
-
-  mediaRecorder.stop();
+async function isOffscreenAlive() {
+  return chrome.offscreen.hasDocument();
 }

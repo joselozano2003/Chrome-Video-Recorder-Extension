@@ -27,9 +27,21 @@ chrome.runtime.sendMessage({ type: 'get-status' }, (response) => {
 });
 
 // ─── Record button ─────────────────────────────────────────────────────────────
-btnRecord.addEventListener('click', () => {
+btnRecord.addEventListener('click', async () => {
   btnRecord.disabled = true;
   setStatus('Starting recording…');
+
+  // If mic is enabled, ensure permission is granted before proceeding.
+  // getUserMedia in the popup is blocked by Chrome — we use a dedicated tab instead.
+  if (toggleMic.checked) {
+    const state = await navigator.permissions.query({ name: 'microphone' });
+    if (state.state !== 'granted') {
+      chrome.tabs.create({ url: chrome.runtime.getURL('permission.html') });
+      setRecordingUI(false);
+      setStatus('Grant mic access in the new tab, then record again.');
+      return;
+    }
+  }
 
   chrome.runtime.sendMessage({
     type: 'start-recording',
