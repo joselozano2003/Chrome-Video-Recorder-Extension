@@ -18,7 +18,8 @@
   "host_permissions": [
     "https://www.googleapis.com/*",
     "https://api.assemblyai.com/*",
-    "http://localhost:3000/*"
+    "http://localhost:3000/*",
+    "https://*.app.github.dev/*"
   ],
 
   "oauth2": {

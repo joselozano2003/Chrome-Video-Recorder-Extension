@@ -11,7 +11,11 @@ let chunkIndex        = 0;
 let pendingWrites     = [];
 let recordingStartMs  = 0;
 
-function pickMimeType(hasAudio) {
+function pickMimeType(hasAudio, audioOnly = false) {
+  if (audioOnly) {
+    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+    return candidates.find(t => MediaRecorder.isTypeSupported(t)) ?? 'audio/webm';
+  }
   // H.264 first — hardware-accelerated on macOS/Windows (lowest CPU)
   // VP8 fallback for platforms where H.264 isn't available
   const candidates = hasAudio
@@ -91,15 +95,18 @@ async function startRecording(streamId, options = {}) {
   const mixedAudioTracks = mixDest.stream.getAudioTracks();
   console.log(`[offscreen] Mixed audio tracks: ${mixedAudioTracks.length}`);
 
-  // Combine mixed audio with tab video into the final stream
-  const finalStream = new MediaStream([...videoTracks, ...mixedAudioTracks]);
+  // Combine tracks into the final stream (audio-only skips video)
+  const finalTracks = options.audioOnly
+    ? [...mixedAudioTracks]
+    : [...videoTracks, ...mixedAudioTracks];
+  const finalStream = new MediaStream(finalTracks);
 
   activeRecordingId = crypto.randomUUID();
   chunkIndex        = 0;
   pendingWrites     = [];
   recordingStartMs  = Date.now();
 
-  const mimeType = pickMimeType(mixedAudioTracks.length > 0);
+  const mimeType = pickMimeType(mixedAudioTracks.length > 0, options.audioOnly);
   console.log(`[offscreen] MediaRecorder mimeType: ${mimeType}`);
 
   mediaRecorder = new MediaRecorder(finalStream, {

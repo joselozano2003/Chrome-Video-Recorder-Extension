@@ -49,8 +49,14 @@ async function pollBackendJobs() {
           docUrl:       data.returnValue.docUrl ?? null,
         });
         console.log(`[background] Job ${job.id} completed — doc: ${data.returnValue.docUrl}`);
+        notify(
+          'Recording ready',
+          'Your transcript and recording are available.',
+          data.returnValue.docUrl ?? null
+        );
       } else if (data.state === 'failed') {
         await updateJob(job.id, { status: 'failed', error: data.failReason || 'Backend job failed' });
+        notify('Recording failed', 'Transcription failed. Open the extension to retry.');
       }
     } catch {
       // Backend unreachable — will retry next alarm tick
@@ -114,6 +120,7 @@ async function handleStartRecording(message) {
       options: {
         systemAudio: message.systemAudio !== false,
         mic: message.mic === true,
+        audioOnly: message.audioOnly === true,
       },
     });
 
@@ -121,6 +128,7 @@ async function handleStartRecording(message) {
 
     chrome.action.setBadgeText({ text: 'REC' });
     chrome.action.setBadgeBackgroundColor({ color: '#FF0000' });
+    chrome.storage.local.set({ recordingStartAt: Date.now() });
 
     return { success: true };
   } catch (err) {
@@ -135,6 +143,7 @@ async function handleStopRecording() {
     const response = await chrome.runtime.sendMessage({ type: 'offscreen-stop' });
 
     chrome.action.setBadgeText({ text: '' });
+    chrome.storage.local.remove('recordingStartAt');
     await new Promise(r => setTimeout(r, 500)); // let offscreen logs flush
     await closeOffscreen();
 
@@ -178,4 +187,23 @@ async function closeOffscreen() {
 
 async function isOffscreenAlive() {
   return chrome.offscreen.hasDocument();
+}
+
+// ─── Notifications ─────────────────────────────────────────────────────────────
+function notify(title, message, url = null) {
+  const id = `rec-${Date.now()}`;
+  chrome.notifications.create(id, {
+    type:    'basic',
+    iconUrl: 'icons/icon128.png',
+    title,
+    message,
+  });
+
+  if (url) {
+    chrome.notifications.onClicked.addListener(function handler(notifId) {
+      if (notifId !== id) return;
+      chrome.tabs.create({ url });
+      chrome.notifications.onClicked.removeListener(handler);
+    });
+  }
 }

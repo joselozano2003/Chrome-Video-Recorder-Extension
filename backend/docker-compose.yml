@@ -1,4 +1,18 @@
 services:
+  backend:
+    build: .
+    container_name: tab-recorder-backend
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     container_name: tab-recorder-redis

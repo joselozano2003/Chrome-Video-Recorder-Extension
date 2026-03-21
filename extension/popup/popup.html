@@ -86,8 +86,19 @@
     #status {
       font-size: 12px;
       color: #888;
-      margin-bottom: 14px;
+      margin-bottom: 6px;
       min-height: 16px;
+    }
+
+    /* ── Timer ── */
+    #timer {
+      font-size: 22px;
+      font-weight: 700;
+      color: #ff3b3b;
+      letter-spacing: 0.05em;
+      font-variant-numeric: tabular-nums;
+      margin-bottom: 14px;
+      min-height: 28px;
     }
 
     /* ── Job List ── */
@@ -212,12 +223,17 @@
       System audio
     </label>
     <label class="toggle-label">
-      <input type="checkbox" id="toggle-mic" />
+      <input type="checkbox" id="toggle-mic" checked />
       Microphone
+    </label>
+    <label class="toggle-label">
+      <input type="checkbox" id="toggle-audio-only" />
+      Audio only
     </label>
   </div>
 
   <div id="status">Ready</div>
+  <div id="timer"></div>
 
   <div class="section-title">Jobs</div>
   <div id="job-list"></div>

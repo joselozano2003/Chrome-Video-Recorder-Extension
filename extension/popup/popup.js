@@ -4,14 +4,19 @@ const btnRecord = document.getElementById('btn-record');
 const btnStop   = document.getElementById('btn-stop');
 const recDot    = document.getElementById('rec-dot');
 const statusEl  = document.getElementById('status');
+const timerEl   = document.getElementById('timer');
 const jobList   = document.getElementById('job-list');
 const toggleSystemAudio = document.getElementById('toggle-system-audio');
 const toggleMic         = document.getElementById('toggle-mic');
+const toggleAudioOnly   = document.getElementById('toggle-audio-only');
+
+let timerInterval = null;
 
 // ─── Load saved preferences ────────────────────────────────────────────────────
-chrome.storage.local.get(['systemAudio', 'mic'], (prefs) => {
+chrome.storage.local.get(['systemAudio', 'mic', 'audioOnly'], (prefs) => {
   if (prefs.systemAudio !== undefined) toggleSystemAudio.checked = prefs.systemAudio;
-  if (prefs.mic        !== undefined) toggleMic.checked        = prefs.mic;
+  if (prefs.mic        !== undefined) toggleMic.checked         = prefs.mic;
+  if (prefs.audioOnly  !== undefined) toggleAudioOnly.checked   = prefs.audioOnly;
 });
 
 toggleSystemAudio.addEventListener('change', () => {
@@ -20,14 +25,31 @@ toggleSystemAudio.addEventListener('change', () => {
 toggleMic.addEventListener('change', () => {
   chrome.storage.local.set({ mic: toggleMic.checked });
 });
+toggleAudioOnly.addEventListener('change', () => {
+  chrome.storage.local.set({ audioOnly: toggleAudioOnly.checked });
+});
 
 // ─── Check current recording state ────────────────────────────────────────────
 chrome.runtime.sendMessage({ type: 'get-status' }, (response) => {
-  if (response?.recording) setRecordingUI(true);
+  if (response?.recording) {
+    chrome.storage.local.get(['recordingStartAt'], (data) => {
+      setRecordingUI(true, data.recordingStartAt || Date.now());
+    });
+  }
 });
 
 // ─── Record button ─────────────────────────────────────────────────────────────
 btnRecord.addEventListener('click', async () => {
+  const hasAudioSource = toggleSystemAudio.checked || toggleMic.checked;
+  if (!hasAudioSource && !toggleAudioOnly.checked) {
+    setStatus('Enable at least one audio source or audio-only mode.');
+    return;
+  }
+  if (toggleAudioOnly.checked && !hasAudioSource) {
+    setStatus('Audio-only mode requires system audio or microphone.');
+    return;
+  }
+
   btnRecord.disabled = true;
   setStatus('Starting recording…');
 
@@ -47,9 +69,12 @@ btnRecord.addEventListener('click', async () => {
     type: 'start-recording',
     systemAudio: toggleSystemAudio.checked,
     mic: toggleMic.checked,
+    audioOnly: toggleAudioOnly.checked,
   }, (response) => {
     if (response?.success) {
-      setRecordingUI(true);
+      chrome.storage.local.get(['recordingStartAt'], (data) => {
+        setRecordingUI(true, data.recordingStartAt || Date.now());
+      });
       setStatus('Recording…');
     } else {
       setRecordingUI(false);
@@ -75,14 +100,41 @@ btnStop.addEventListener('click', () => {
 });
 
 // ─── UI helpers ───────────────────────────────────────────────────────────────
-function setRecordingUI(isRecording) {
+function setRecordingUI(isRecording, startMs = null) {
   btnRecord.disabled = isRecording;
   btnStop.disabled   = !isRecording;
   recDot.classList.toggle('recording', isRecording);
+  if (isRecording && startMs) {
+    startTimer(startMs);
+  } else {
+    stopTimer();
+  }
 }
 
 function setStatus(text) {
   statusEl.textContent = text;
+}
+
+function startTimer(startMs) {
+  stopTimer();
+  const update = () => {
+    const elapsed = Date.now() - startMs;
+    const s = Math.floor(elapsed / 1000) % 60;
+    const m = Math.floor(elapsed / 60000) % 60;
+    const h = Math.floor(elapsed / 3600000);
+    const pad = n => String(n).padStart(2, '0');
+    timerEl.textContent = h > 0
+      ? `${pad(h)}:${pad(m)}:${pad(s)}`
+      : `${pad(m)}:${pad(s)}`;
+  };
+  update();
+  timerInterval = setInterval(update, 1000);
+}
+
+function stopTimer() {
+  clearInterval(timerInterval);
+  timerInterval = null;
+  timerEl.textContent = '';
 }
 
 // ─── Job list rendering ───────────────────────────────────────────────────────
