@@ -1,11 +1,12 @@
 // popup.js — UI logic for the Chrome Tab Recorder popup
 
-const btnRecord = document.getElementById('btn-record');
-const btnStop   = document.getElementById('btn-stop');
-const recDot    = document.getElementById('rec-dot');
-const statusEl  = document.getElementById('status');
-const timerEl   = document.getElementById('timer');
-const jobList   = document.getElementById('job-list');
+const btnRecord       = document.getElementById('btn-record');
+const btnStop         = document.getElementById('btn-stop');
+const recDot          = document.getElementById('rec-dot');
+const statusEl        = document.getElementById('status');
+const timerEl         = document.getElementById('timer');
+const jobList         = document.getElementById('job-list');
+const btnClearHistory = document.getElementById('btn-clear-history');
 const toggleSystemAudio = document.getElementById('toggle-system-audio');
 const toggleMic         = document.getElementById('toggle-mic');
 const toggleAudioOnly   = document.getElementById('toggle-audio-only');
@@ -41,12 +42,8 @@ chrome.runtime.sendMessage({ type: 'get-status' }, (response) => {
 // ─── Record button ─────────────────────────────────────────────────────────────
 btnRecord.addEventListener('click', async () => {
   const hasAudioSource = toggleSystemAudio.checked || toggleMic.checked;
-  if (!hasAudioSource && !toggleAudioOnly.checked) {
-    setStatus('Enable at least one audio source or audio-only mode.');
-    return;
-  }
-  if (toggleAudioOnly.checked && !hasAudioSource) {
-    setStatus('Audio-only mode requires system audio or microphone.');
+  if (!hasAudioSource) {
+    setStatus('Enable system audio or microphone to record.');
     return;
   }
 
@@ -86,12 +83,14 @@ btnRecord.addEventListener('click', async () => {
 // ─── Stop button ───────────────────────────────────────────────────────────────
 btnStop.addEventListener('click', () => {
   btnStop.disabled = true;
+  stopTimer(); // stop immediately — don't wait for async response
+  recDot.classList.remove('recording');
   setStatus('Stopping…');
 
   chrome.runtime.sendMessage({ type: 'stop-recording' }, (response) => {
     setRecordingUI(false);
     if (response?.success) {
-      setStatus('Saved. Uploading…');
+      setStatus('Saved locally. Starting upload…');
       renderJobs(); // refresh immediately
     } else {
       setStatus(`Error: ${response?.error || 'Unknown error'}`);
@@ -157,28 +156,45 @@ async function renderJobs() {
   });
 }
 
+function formatJobDate(ts) {
+  const d   = new Date(ts);
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) return time;
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' · ' + time;
+}
+
 function jobCard(job) {
-  const date = new Date(job.createdAt).toLocaleTimeString();
+  const date    = formatJobDate(job.createdAt);
   const shortId = job.id.slice(0, 8);
 
   let progressHtml = '';
   if (job.status === 'uploading' && job.uploadProgress != null) {
+    const pct = Math.min(100, Math.max(0, Number(job.uploadProgress) || 0));
     progressHtml = `
       <div class="progress-bar-wrap">
-        <div class="progress-bar-fill" style="width:${job.uploadProgress}%"></div>
+        <div class="progress-bar-fill" style="width:${pct}%"></div>
       </div>`;
   }
 
+  const safeUrl = (url) => (typeof url === 'string' && url.startsWith('https://')) ? url : null;
   let linksHtml = '';
-  if (job.driveFileUrl) linksHtml += `<a href="${job.driveFileUrl}" target="_blank">Drive</a>`;
-  if (job.docUrl)       linksHtml += `<a href="${job.docUrl}" target="_blank">Transcript</a>`;
+  if (safeUrl(job.driveFileUrl)) linksHtml += `<a href="${job.driveFileUrl}" target="_blank">Drive</a>`;
+  if (safeUrl(job.docUrl))       linksHtml += `<a href="${job.docUrl}" target="_blank">Transcript</a>`;
   if (linksHtml)        linksHtml = `<div class="job-links">${linksHtml}</div>`;
 
   const errorHtml = job.error
     ? `<div class="job-error">${escapeHtml(job.error)}</div>` : '';
 
-  const retryHtml = job.status === 'failed'
-    ? `<button class="btn-retry" data-job-id="${job.id}">Retry</button>` : '';
+  const seekableWarn = job.status === 'completed' && job.seekable === false
+    ? `<div class="job-warning">Recording saved as .webm — seekability limited</div>` : '';
+
+  const retryCount = job.retryCount > 0 ? ` (attempt ${job.retryCount + 1})` : '';
+  // Show retry button for failed jobs AND for uploaded jobs where backend notification failed
+  const showRetry = job.status === 'failed' || (job.status === 'uploaded' && job.error);
+  const retryLabel = job.status === 'uploaded' ? 'Notify server' : `Retry${retryCount}`;
+  const retryHtml = showRetry
+    ? `<button class="btn-retry" data-job-id="${job.id}">${retryLabel}</button>` : '';
 
   return `
     <div class="job-card">
@@ -188,13 +204,19 @@ function jobCard(job) {
       </div>
       ${progressHtml}
       ${linksHtml}
+      ${seekableWarn}
       ${errorHtml}
       ${retryHtml}
     </div>`;
 }
 
 function escapeHtml(str) {
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // ─── Read jobs from chrome.storage ────────────────────────────────────────────
@@ -207,12 +229,30 @@ function getJobs() {
 }
 
 // ─── Retry a failed job ───────────────────────────────────────────────────────
+const retryingJobs = new Set(); // debounce — prevent double-clicks
+
 async function retryJob(jobId) {
+  if (retryingJobs.has(jobId)) return;
+  retryingJobs.add(jobId);
+
+  const btn = jobList.querySelector(`.btn-retry[data-job-id="${jobId}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Retrying…'; }
+
   chrome.runtime.sendMessage({ type: 'retry-job', jobId }, () => {
+    retryingJobs.delete(jobId);
     renderJobs();
   });
 }
 
-// ─── Poll for updates every 2 seconds ────────────────────────────────────────
+// ─── Clear history ────────────────────────────────────────────────────────────
+btnClearHistory.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'clear-history' }, () => renderJobs());
+});
+
+// ─── Render loop ──────────────────────────────────────────────────────────────
+// Render from local storage every 2 seconds (cheap — no network).
+// Also ask the background to fetch fresh status from the backend every 5 seconds
+// so the popup doesn't have to wait for the 1-minute chrome.alarms tick.
 renderJobs();
 setInterval(renderJobs, 2000);
+setInterval(() => chrome.runtime.sendMessage({ type: 'poll-jobs' }), 5000);

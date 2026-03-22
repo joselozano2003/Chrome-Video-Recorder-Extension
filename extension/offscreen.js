@@ -155,7 +155,7 @@ async function stopRecording() {
         const durationMs  = Date.now() - recordingStartMs;
         activeRecordingId = null;
         recordingStartMs  = 0;
-        await assembleAndSave(recordingId, durationMs);
+        await assembleAndSave(recordingId);
         console.log(`[offscreen] Assembled recording ${recordingId} (${Math.round(durationMs / 1000)}s)`);
 
         // Return recordingId to background.js — it will create the job and start upload

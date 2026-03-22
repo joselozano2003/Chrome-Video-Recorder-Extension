@@ -46,6 +46,10 @@ MV3 service workers have no persistent memory — they can be killed by Chrome a
 - **No in-memory state.** All job data, upload progress, and session URIs are stored in `chrome.storage.local`.
 - **No long-running async chains in the service worker.** The offscreen document handles the blocking MediaRecorder work; the service worker only coordinates.
 - **`chrome.alarms`** is used for periodic backend polling instead of `setInterval`, which does not survive service worker restarts.
+- **Startup recovery** runs on both `onStartup` and `onInstalled`. Jobs in `pending`/`uploading` state resume their Drive upload. Jobs in `uploaded` state (Drive upload done but backend notification lost before browser closed) re-notify the backend automatically.
+- **Orphaned chunk cleanup** runs on every startup. If the browser crashed mid-recording, chunks remain in IndexedDB with no corresponding assembled blob. On restart, any chunks whose `recordingId` is not referenced by a known job are deleted automatically.
+- **Concurrent recording mutex.** A `recordingInProgress` flag in `chrome.storage.local` prevents a second `start-recording` from being processed while one is already in flight. The flag is cleared on successful start, on error, and on stop.
+- **Offscreen zombie recovery.** `ensureOffscreen` always force-closes any existing offscreen document before creating a new one, recovering from stale instances left behind by a crashed previous session.
 
 ### Tab recording (`offscreen.js`)
 
@@ -92,6 +96,21 @@ This makes uploads resilient to browser restarts, network drops, and sleep/wake 
 
 Upload failures are retried up to 5 times with exponential backoff (base 30 seconds). After 5 failures the job moves to `failed` and a Chrome notification is shown. The user can manually retry from the popup, which restarts the upload from the last valid session.
 
+### Session URI expiry
+
+Google Drive resumable session URIs are valid for 7 days. If a `PUT` chunk returns 404 or 410, the cached `sessionUri` is cleared from the job record and an error is thrown. The next retry (manual or alarm-triggered) will initiate a fresh session.
+
+### Server-offline resilience
+
+`notifyBackend` (the `POST /jobs` call after Drive upload) does **not** use `setTimeout` for retries — `setTimeout` is killed when the service worker suspends. Instead:
+
+1. On failure, the job stays in `uploaded` state and the error is written to `job.error` so the popup shows "Server unreachable — retrying automatically."
+2. A `Notify server` button appears on the job card for immediate manual retry.
+3. The `poll-backend` alarm fires every minute and calls `retryUploadedJobs()`, which calls `startUpload` for every `uploaded` job. `startUpload` sees `driveFileId` is already set and skips straight to `notifyBackend`.
+4. On success, `job.error` is cleared and status moves to `queued`.
+
+This means recordings are never lost if the backend is temporarily unavailable — they queue up in `uploaded` state and drain automatically once the server is reachable again.
+
 ---
 
 ## Duplicate Job Prevention
@@ -106,6 +125,22 @@ BullMQ deduplicates by job ID — submitting the same ID twice is a no-op. This 
 ---
 
 ## Backend Queue Architecture
+
+### Retry strategy
+
+| Stage | Auto retry | Manual retry |
+|---|---|---|
+| Drive upload | 5 attempts, exponential backoff per chunk | ✅ Popup retry button resumes from last byte |
+| Session URI expired | Clears cached URI on 404/410; next attempt starts a fresh session | ✅ Same retry button |
+| Backend notification | Every 1 min via `poll-backend` alarm (`retryUploadedJobs`) | ✅ "Notify server" button on the job card |
+| Transcription | BullMQ 3 attempts, exponential backoff; 90-min timeout per attempt | ✅ `POST /jobs` detects failed BullMQ job, removes it, re-queues with fresh attempts |
+| Email | 3 attempts, 5s delay between — never fails the job | N/A |
+
+When the user clicks Retry on a failed job in the popup, `startUpload` is called. If the Drive upload already completed (`driveFileId` is set), it skips straight to `notifyBackend`. The backend checks the BullMQ job state — if `failed`, it removes the old job and re-adds it, resetting the attempt counter.
+
+### BullMQ dashboard authentication
+
+The Bull Board dashboard (`/admin`) is protected with HTTP Basic Auth. Credentials default to `admin`/`admin` and can be overridden with the `ADMIN_USER` and `ADMIN_PASS` environment variables. Job payloads contain short-lived OAuth tokens — the dashboard should not be exposed publicly without authentication.
 
 ### Why BullMQ + Redis
 
@@ -127,8 +162,9 @@ The same architecture could be swapped for Cloud Tasks with minimal changes to t
 3. Upload raw audio/video buffer to AssemblyAI (hosted URL)
 4. Submit transcription job (speaker_labels: true, speech_models: universal-2)
 5. Poll AssemblyAI every 5 seconds until complete
-6. Create Google Doc (title, date, Drive link, full transcript with speaker labels)
-7. Send completion email via Resend (Drive link + Doc link)
+6. Create Google Doc (title uses recording creation time, not server time)
+   - Moved into session folder alongside the recording
+7. Send completion email via Resend — best-effort, never retried or fails the job
 8. Return { transcriptId, docId, docUrl } as job return value
 ```
 
@@ -142,7 +178,7 @@ AssemblyAI is used for speech-to-text with the `universal-2` model and `speaker_
 
 The audio file is first uploaded to AssemblyAI's hosted storage via `POST /upload` (returns a URL). The transcription request references this URL — AssemblyAI pulls and processes the file server-side, avoiding large payloads in the polling response.
 
-Polling runs every 5 seconds until `status` is `completed` or `error`. For a 2-hour recording at typical speech density, processing takes 5–15 minutes.
+Polling runs every 5 seconds until `status` is `completed` or `error`. For a 2-hour recording at typical speech density, processing takes 5–15 minutes. Polling is capped at **90 minutes** — if AssemblyAI has not completed within that window, the job fails with a timeout error (BullMQ will retry up to 3 times).
 
 For very long recordings, AssemblyAI handles segmentation internally. No client-side chunking is required.
 
@@ -167,7 +203,9 @@ Email is sent via [Resend](https://resend.com) after the Google Doc is created. 
 
 The email contains links to the Drive recording and the transcript Doc.
 
-Optional failure notifications are sent as Chrome notifications (via `chrome.notifications`) when a job fails, prompting the user to retry from the popup.
+Email delivery is **best-effort** — a failure does not retry or fail the job. The transcript and Drive file are already created at this point; losing an email notification is non-fatal.
+
+Chrome notifications (via `chrome.notifications`) fire on both completion and failure. A single persistent `onClicked` listener handles all notifications via a shared `pendingNotifUrls` map, avoiding the handler-per-notification leak that would otherwise accumulate over many sessions.
 
 ---
 
@@ -179,6 +217,7 @@ Optional failure notifications are sent as Chrome notifications (via `chrome.not
 | Upload size | Google Drive resumable upload; no size limit |
 | Upload interruption | Session URI persisted; resumes from last byte |
 | FFmpeg memory | Stream-copy (`-c:v copy`); no re-encode; I/O bound not CPU bound |
+| FFmpeg unavailable | Falls back to original .webm; `seekable: false` flag stored in job record; popup shows a warning on the completed job card |
 | Transcription length | AssemblyAI handles multi-hour files natively |
 | Worker timeout | BullMQ job has no default timeout; polling loop runs until AssemblyAI responds |
 

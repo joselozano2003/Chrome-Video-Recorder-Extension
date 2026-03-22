@@ -12,7 +12,7 @@ const DOCS_BASE  = 'https://docs.googleapis.com/v1/documents';
  * @param {string} accessToken    — Google OAuth token with documents scope
  * @returns {{ docId: string, docUrl: string }}
  */
-export async function createTranscriptDoc(title, recordingDate, driveUrl, transcriptText, utterances = [], accessToken) {
+export async function createTranscriptDoc(title, recordingDate, driveUrl, transcriptText, utterances = [], accessToken, sessionFolderId = null) {
   const authHeader = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
 
   // Step 1: Create the empty document
@@ -34,18 +34,27 @@ export async function createTranscriptDoc(title, recordingDate, driveUrl, transc
     method: 'POST',
     headers: authHeader,
     body: JSON.stringify({
-      requests: [
-        {
-          insertText: {
-            location: { index: 1 },
-            text: body,
-          },
-        },
-      ],
+      requests: [{ insertText: { location: { index: 1 }, text: body } }],
     }),
   });
   if (!updateRes.ok) {
     throw new Error(`Docs insert failed (${updateRes.status}): ${await updateRes.text()}`);
+  }
+
+  // Step 4: Move the doc into the session folder (alongside the recording)
+  if (sessionFolderId) {
+    const fileRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${documentId}?fields=parents`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (fileRes.ok) {
+      const { parents } = await fileRes.json();
+      const removeParents = (parents || []).join(',');
+      await fetch(
+        `https://www.googleapis.com/drive/v3/files/${documentId}?addParents=${sessionFolderId}&removeParents=${removeParents}`,
+        { method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+    }
   }
 
   const docUrl = `https://docs.google.com/document/d/${documentId}/edit`;

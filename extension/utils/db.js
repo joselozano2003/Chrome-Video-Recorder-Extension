@@ -6,7 +6,6 @@
 //   recordings — final assembled blobs  { id, blob, savedAt }
 //   chunks     — in-flight recording chunks { recordingId, index, data }
 
-import { fixWebmDuration } from './fixWebmDuration.js';
 
 const DB_NAME    = 'TabRecorder';
 const DB_VERSION = 2;
@@ -52,9 +51,8 @@ export async function appendChunk(recordingId, index, data) {
  * Read all chunks for a recording, assemble into a single Blob, save to
  * the recordings store, then delete the raw chunks.
  * @param {string} recordingId
- * @param {number} [durationMs] — actual recording duration; patches WebM header for seekability
  */
-export async function assembleAndSave(recordingId, durationMs = 0) {
+export async function assembleAndSave(recordingId) {
   const db = await openDB();
 
   // 1. Read all chunks in order
@@ -66,9 +64,8 @@ export async function assembleAndSave(recordingId, durationMs = 0) {
   });
   chunks.sort((a, b) => a.index - b.index);
 
-  // 2. Assemble blob and patch duration for seekability
-  const raw  = new Blob(chunks.map(c => c.data), { type: 'video/webm' });
-  const blob = durationMs > 0 ? await fixWebmDuration(raw, durationMs) : raw;
+  // 2. Assemble blob — seekability is handled by the backend FFmpeg remux
+  const blob = new Blob(chunks.map(c => c.data), { type: 'video/webm' });
 
   // 3. Save to recordings store
   await new Promise((resolve, reject) => {
@@ -99,6 +96,33 @@ export async function getRecording(id) {
     const req = tx.objectStore(REC_STORE).get(id);
     req.onsuccess = () => resolve(req.result?.blob ?? null);
     req.onerror   = () => reject(req.error);
+  });
+}
+
+/**
+ * Delete orphaned chunks left by recordings that never completed assembly
+ * (e.g. browser crashed mid-recording). Called on extension startup.
+ * @param {Set<string>} knownRecordingIds — IDs still referenced by jobs
+ */
+export async function cleanupOrphanedChunks(knownRecordingIds) {
+  const db = await openDB();
+  const allChunks = await new Promise((resolve, reject) => {
+    const tx  = db.transaction(CHUNK_STORE, 'readonly');
+    const req = tx.objectStore(CHUNK_STORE).getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror   = () => reject(req.error);
+  });
+
+  const orphaned = allChunks.filter(c => !knownRecordingIds.has(c.recordingId));
+  if (!orphaned.length) return;
+
+  console.log(`[db] Removing ${orphaned.length} orphaned chunks from ${new Set(orphaned.map(c => c.recordingId)).size} crashed recording(s)`);
+  await new Promise((resolve, reject) => {
+    const tx    = db.transaction(CHUNK_STORE, 'readwrite');
+    const store = tx.objectStore(CHUNK_STORE);
+    for (const chunk of orphaned) store.delete([chunk.recordingId, chunk.index]);
+    tx.oncomplete = () => resolve();
+    tx.onerror    = () => reject(tx.error);
   });
 }
 

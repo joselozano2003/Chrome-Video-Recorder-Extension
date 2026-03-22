@@ -33,7 +33,22 @@ createBullBoard({
   serverAdapter,
 });
 
-app.use('/admin', serverAdapter.getRouter());
+// Basic auth guard — job data contains short-lived OAuth tokens; don't expose publicly.
+const ADMIN_USER = process.env.ADMIN_USER || 'admin';
+const ADMIN_PASS = process.env.ADMIN_PASS || 'admin';
+
+app.use('/admin', (req, res, next) => {
+  const auth = req.headers.authorization;
+  if (auth) {
+    const [scheme, encoded] = auth.split(' ');
+    if (scheme === 'Basic' && encoded) {
+      const [user, pass] = Buffer.from(encoded, 'base64').toString().split(':');
+      if (user === ADMIN_USER && pass === ADMIN_PASS) return next();
+    }
+  }
+  res.set('WWW-Authenticate', 'Basic realm="Bull Board"');
+  res.status(401).send('Unauthorized');
+}, serverAdapter.getRouter());
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use('/jobs', jobsRouter);

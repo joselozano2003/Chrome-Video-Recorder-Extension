@@ -40,7 +40,7 @@ export const transcriptionQueue = new Queue('transcription', { connection });
 
 // ─── Worker ───────────────────────────────────────────────────────────────────
 const worker = new Worker('transcription', async (job) => {
-  const { jobId, driveFileId, accessToken, userEmail } = job.data;
+  const { jobId, driveFileId, sessionFolderId, accessToken, userEmail, createdAt } = job.data;
   console.log(`[worker] Processing job ${jobId} (driveFileId: ${driveFileId})`);
 
   // ── Step 1: Download audio from Google Drive ───────────────────────────────
@@ -61,6 +61,7 @@ const worker = new Worker('transcription', async (job) => {
 
   // ── Step 1b: Remux with FFmpeg to add Duration + seek index ───────────────
   let audioBuffer = rawBuffer;
+  let seekable = false;
   try {
     const { buffer, mimeType } = await remuxToMp4(rawBuffer);
     audioBuffer = buffer;
@@ -86,9 +87,10 @@ const worker = new Worker('transcription', async (job) => {
         body: JSON.stringify({ name: mp4Name }),
       });
     }
+    seekable = true;
     console.log(`[worker] Drive file updated (MP4, fully seekable)`);
   } catch (err) {
-    console.warn(`[worker] FFmpeg remux skipped (${err.message}) — using original`);
+    console.warn(`[worker] FFmpeg remux failed (${err.message}) — recording saved as .webm, seekability limited`);
   }
 
   // ── Step 2: Upload to AssemblyAI (get a hosted URL) ───────────────────────
@@ -115,31 +117,46 @@ const worker = new Worker('transcription', async (job) => {
 
   // ── Step 5: Create Google Doc with transcript ─────────────────────────────
   await job.updateProgress(80);
-  const title = `Transcript — ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  const recordingDate = new Date(createdAt);
+  const title = `Transcript — ${recordingDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
   const driveUrl = `https://drive.google.com/file/d/${driveFileId}/view`;
 
   const { docId, docUrl } = await createTranscriptDoc(
     title,
-    new Date().toISOString(),
+    recordingDate.toISOString(),
     driveUrl,
     text,
     utterances,
     accessToken,
+    sessionFolderId,
   );
   console.log(`[worker] Google Doc created: ${docUrl}`);
 
-  // ── Step 6: Send completion email ─────────────────────────────────────────
+  // ── Step 6: Send completion email (best-effort — 3 attempts, never fails job) ─
   const recipient = userEmail || process.env.NOTIFY_EMAIL;
   if (recipient) {
-    await sendCompletionEmail(recipient, driveUrl, docUrl, new Date().toISOString());
-    console.log(`[worker] Email sent to ${recipient}`);
+    const EMAIL_ATTEMPTS = 3;
+    const EMAIL_DELAY_MS = 5_000;
+    let emailSent = false;
+    for (let attempt = 1; attempt <= EMAIL_ATTEMPTS; attempt++) {
+      try {
+        await sendCompletionEmail(recipient, driveUrl, docUrl, recordingDate.toISOString());
+        console.log(`[worker] Email sent to ${recipient}`);
+        emailSent = true;
+        break;
+      } catch (err) {
+        console.warn(`[worker] Email attempt ${attempt}/${EMAIL_ATTEMPTS} failed: ${err.message}`);
+        if (attempt < EMAIL_ATTEMPTS) await new Promise(r => setTimeout(r, EMAIL_DELAY_MS));
+      }
+    }
+    if (!emailSent) console.warn(`[worker] Email delivery failed after ${EMAIL_ATTEMPTS} attempts — job still completed`);
   } else {
     console.warn(`[worker] No recipient email — set NOTIFY_EMAIL in .env`);
   }
 
   await job.updateProgress(100);
 
-  return { status: 'completed', jobId, transcriptId, charCount: text.length, docId, docUrl };
+  return { status: 'completed', jobId, transcriptId, charCount: text.length, docId, docUrl, seekable };
 }, {
   connection,
   concurrency: 2,

@@ -9,10 +9,10 @@
 
 import { getJob, updateJob } from './queue.js';
 import { getRecording, deleteRecording } from './db.js';
+import { BACKEND_URL } from '../config.js';
 
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
 const MAX_RETRIES = 5;
-const BACKEND_URL = 'http://localhost:3000';
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 /**
@@ -38,12 +38,19 @@ export async function startUpload(jobId) {
     console.log(`[upload] Blob size: ${(blob.size / 1024 / 1024).toFixed(2)} MB, type: ${blob.type}`);
 
     const token = await getAuthToken();
-    const folderId = await ensureDriveFolder(token);
+    const rootFolderId = await ensureDriveFolder(token);
+
+    // Get (or create) the per-recording session subfolder
+    let sessionFolderId = job.sessionFolderId;
+    if (!sessionFolderId) {
+      sessionFolderId = await ensureSessionFolder(token, rootFolderId, job.createdAt);
+      await updateJob(jobId, { sessionFolderId });
+    }
 
     // Step 1: Get (or reuse) session URI
     let sessionUri = job.sessionUri;
     if (!sessionUri) {
-      sessionUri = await initiateResumableUpload(token, folderId, blob.size);
+      sessionUri = await initiateResumableUpload(token, sessionFolderId, blob.size);
       await updateJob(jobId, { sessionUri });
     }
 
@@ -104,6 +111,11 @@ async function uploadChunks(jobId, blob, sessionUri, token) {
 
       if (err.status === 401) {
         token = await getAuthToken(true); // force refresh
+      } else if (err.status === 404 || err.status === 410) {
+        // Session URI expired (Drive sessions are valid for 7 days).
+        // Clear it so startUpload() creates a fresh session on next run.
+        await updateJob(jobId, { sessionUri: null });
+        throw new Error('Upload session expired — will restart on next retry');
       } else {
         // Exponential backoff
         const delay = Math.pow(2, retries) * 1000;
@@ -192,12 +204,47 @@ async function initiateResumableUpload(token, folderId, fileSize) {
   return res.headers.get('Location');
 }
 
-// ─── Drive folder ──────────────────────────────────────────────────────────────
+// ─── Drive folders ─────────────────────────────────────────────────────────────
+async function ensureSessionFolder(token, rootFolderId, createdAt) {
+  const name = `Recording — ${new Date(createdAt).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  })}`;
+
+  const res = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name,
+      mimeType: 'application/vnd.google-apps.folder',
+      parents: [rootFolderId],
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to create session folder: ${res.status}`);
+  const folder = await res.json();
+  return folder.id;
+}
+
 async function ensureDriveFolder(token) {
   const stored = await new Promise(r =>
     chrome.storage.local.get(['driveFolderId'], d => r(d.driveFolderId))
   );
-  if (stored) return stored;
+
+  if (stored) {
+    // Verify the cached folder still exists and hasn't been trashed.
+    // If the user deleted it, clear the cache so we recreate it below.
+    try {
+      const checkRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${stored}?fields=id,trashed`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (checkRes.ok) {
+        const data = await checkRes.json();
+        if (!data.trashed) return stored;
+      }
+    } catch { /* network error — fall through and recreate */ }
+    chrome.storage.local.remove('driveFolderId');
+  }
 
   // Search for existing folder
   const searchRes = await fetch(
@@ -231,42 +278,64 @@ async function ensureDriveFolder(token) {
 
 // ─── OAuth ────────────────────────────────────────────────────────────────────
 function getAuthToken(forceRefresh = false) {
+  if (!forceRefresh) {
+    return new Promise((resolve, reject) => {
+      chrome.identity.getAuthToken({ interactive: true }, (token) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve(token);
+      });
+    });
+  }
+
+  // Force-refresh: evict the cached token then fetch a new one.
+  // This is necessary after multi-hour uploads where the cached token has expired.
   return new Promise((resolve, reject) => {
-    chrome.identity.getAuthToken({ interactive: true, ...(forceRefresh ? { scopes: [] } : {}) }, (token) => {
-      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-      else resolve(token);
+    chrome.identity.getAuthToken({ interactive: false }, (staleToken) => {
+      const evict = staleToken
+        ? new Promise(r => chrome.identity.removeCachedAuthToken({ token: staleToken }, r))
+        : Promise.resolve();
+
+      evict.then(() => {
+        chrome.identity.getAuthToken({ interactive: true }, (token) => {
+          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+          else resolve(token);
+        });
+      });
     });
   });
 }
 
 // ─── Notify backend ───────────────────────────────────────────────────────────
-async function notifyBackend(job, retryCount = 0) {
-  const MAX_BACKEND_RETRIES = 10;
-  const RETRY_INTERVAL_MS   = 60_000;
-
+async function notifyBackend(job) {
   try {
-    // Get a fresh token so the backend can download the file from Drive.
-    // Tokens are valid for ~1 hour — enough time for the worker to process the job.
-    const accessToken = await getAuthToken();
+    // Force-refresh the token — the Drive upload may have taken hours,
+    // so the cached token is very likely expired by the time we reach this step.
+    const accessToken = await getAuthToken(true);
 
     const res = await fetch(`${BACKEND_URL}/jobs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        jobId:       job.id,
-        driveFileId: job.driveFileId,
-        userEmail:   job.userEmail || '',
+        jobId:           job.id,
+        driveFileId:     job.driveFileId,
+        sessionFolderId: job.sessionFolderId || null,
+        userEmail:       job.userEmail || '',
+        createdAt:       job.createdAt,
         accessToken,
       }),
     });
 
     if (!res.ok) throw new Error(`Backend returned ${res.status}`);
-    await updateJob(job.id, { status: 'queued' });
+
+    // Success — clear any previous unreachable error and move to queued
+    await updateJob(job.id, { status: 'queued', error: null });
   } catch (err) {
-    console.warn(`[upload] Backend unreachable (attempt ${retryCount + 1}):`, err.message);
-    if (retryCount < MAX_BACKEND_RETRIES) {
-      setTimeout(() => notifyBackend(job, retryCount + 1), RETRY_INTERVAL_MS);
-    }
+    // Leave the job in 'uploaded' state so the alarm-based retry picks it up.
+    // Surface the error in the popup so the user knows what's happening.
+    console.warn('[upload] Backend unreachable — will retry on next alarm tick:', err.message);
+    await updateJob(job.id, {
+      error: `Server unreachable — retrying automatically. (${err.message})`,
+    });
   }
 }
 

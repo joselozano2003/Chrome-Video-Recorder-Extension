@@ -9,30 +9,33 @@ const router = Router();
 // Called by the extension after a successful Drive upload.
 // Enqueues a transcription job in BullMQ.
 router.post('/', async (req, res) => {
-  const { jobId, driveFileId, userEmail, accessToken } = req.body;
+  const { jobId, driveFileId, sessionFolderId, userEmail, createdAt, accessToken } = req.body;
 
   if (!jobId || !driveFileId) {
     return res.status(400).json({ error: 'jobId and driveFileId are required' });
   }
 
-  try {
-    await transcriptionQueue.add(
-      'transcribe',
-      { jobId, driveFileId, userEmail: userEmail || '', accessToken },
-      {
-        jobId,           // use extension jobId so idempotent re-queues are safe
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5_000 },
-      }
-    );
+  const jobData = { jobId, driveFileId, sessionFolderId: sessionFolderId || null, userEmail: userEmail || '', createdAt: createdAt || Date.now(), accessToken };
+  const jobOpts = { jobId, attempts: 3, backoff: { type: 'exponential', delay: 5_000 } };
 
+  try {
+    // If a previous run failed and exhausted all attempts, remove it so it can be re-queued
+    const existing = await transcriptionQueue.getJob(jobId);
+    if (existing) {
+      const state = await existing.getState();
+      if (state === 'failed') {
+        await existing.remove();
+        console.log(`[jobs] Removed failed job ${jobId} for re-queue`);
+      } else {
+        // Still active/waiting — don't duplicate
+        return res.status(202).json({ queued: true, jobId, note: 'already queued' });
+      }
+    }
+
+    await transcriptionQueue.add('transcribe', jobData, jobOpts);
     console.log(`[jobs] Queued transcription job: ${jobId}`);
     return res.status(202).json({ queued: true, jobId });
   } catch (err) {
-    // BullMQ throws if a job with the same ID already exists — that's fine
-    if (err.message?.includes('already exists')) {
-      return res.status(202).json({ queued: true, jobId, note: 'already queued' });
-    }
     console.error('[jobs] Failed to enqueue job:', err);
     return res.status(500).json({ error: 'Failed to queue job' });
   }

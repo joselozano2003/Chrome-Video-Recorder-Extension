@@ -9,9 +9,11 @@ A Chrome extension that records browser tabs, automatically uploads recordings t
 - Record any browser tab (video + system audio + microphone, or audio-only)
 - Chunked recording streamed to IndexedDB — flat memory usage for long recordings
 - Resumable Google Drive upload with automatic retry on failure
+- Recordings organised into per-session folders inside a root **Tab Recordings** Drive folder
 - Backend transcription pipeline: FFmpeg remux → AssemblyAI → Google Doc
 - Email notification with links to the recording and transcript
 - Job queue visible in the extension popup with live status updates
+- **Server-offline resilience**: if the backend is unreachable after a Drive upload, the popup shows the error and automatically retries every minute via `chrome.alarms` — no recordings are lost
 
 ---
 
@@ -54,6 +56,15 @@ BullMQ jobs are keyed by the extension's job ID. Re-queuing the same job is a no
 **Service worker resilience**
 MV3 service workers can be killed at any time. All state (jobs, upload progress, session URIs) lives in `chrome.storage.local`, never in memory. On `onStartup` and `onInstalled`, pending jobs are automatically resumed.
 
+**Server-offline retry**
+`notifyBackend` does not use `setTimeout` (which is killed when the service worker suspends). Instead, failed notifications leave the job in `uploaded` state and a `retryUploadedJobs` call runs on every `poll-backend` alarm tick (every 1 minute). The popup surfaces the error so the user can also trigger a manual retry.
+
+**Concurrent recording protection**
+A `recordingInProgress` flag in `chrome.storage.local` acts as a mutex. A second start attempt is rejected immediately, preventing state corruption from double-clicks or rapid popup re-opens.
+
+**Offscreen zombie recovery**
+`ensureOffscreen` always force-closes any existing offscreen document before creating a new one. This recovers from stale offscreen instances left behind by a crashed previous session.
+
 ---
 
 ## Prerequisites
@@ -90,13 +101,11 @@ docker compose up --build
 ```
 
 This starts both Redis and the backend. The server is available at `http://localhost:3000`.
-BullMQ dashboard: `http://localhost:3000/admin`
+BullMQ dashboard: `http://localhost:3000/admin` (default credentials: `admin` / `admin` — override with `ADMIN_USER` / `ADMIN_PASS` env vars)
 
 > **For local development** (hot reload): run Redis only via `docker compose up redis`, then `npm install && npm run dev` in a separate terminal.
 
 ### 4. Install the Chrome extension
-
-### 5. Install the Chrome extension
 
 1. Open Chrome → `chrome://extensions`
 2. Enable **Developer mode** (top right)
@@ -132,10 +141,10 @@ https://your-codespace-3000.app.github.dev
 
 ### 3. Point the extension at Codespaces
 
-In `extension/background.js`, replace the `BACKEND_URL`:
+In `extension/config.js`, replace the `BACKEND_URL`:
 
 ```js
-const BACKEND_URL = 'https://your-codespace-3000.app.github.dev';
+export const BACKEND_URL = 'https://your-codespace-3000.app.github.dev';
 ```
 
 > Make sure there is **no trailing slash** at the end of the URL.
@@ -183,6 +192,8 @@ The extension will now send jobs to the Codespaces backend. Note that the forwar
 | `ASSEMBLYAI_API_KEY` | AssemblyAI API key |
 | `RESEND_API_KEY` | Resend API key |
 | `NOTIFY_EMAIL` | Fallback recipient email for notifications |
+| `ADMIN_USER` | BullMQ dashboard username (default: `admin`) |
+| `ADMIN_PASS` | BullMQ dashboard password (default: `admin`) |
 
 ---
 
@@ -197,8 +208,7 @@ Recorder/
 │   ├── utils/
 │   │   ├── db.js            # IndexedDB: chunk streaming + blob assembly
 │   │   ├── queue.js         # Job queue (chrome.storage.local)
-│   │   ├── upload.js        # Resumable Google Drive upload
-│   │   └── fixWebmDuration.js  # WebM EBML duration patch (fallback)
+│   │   └── upload.js        # Resumable Google Drive upload
 │   └── manifest.json
 │
 └── backend/                 # Node.js backend
@@ -240,3 +250,5 @@ The system was designed around recordings up to 2 hours:
 - **FFmpeg**: Remux is stream-copy (`-c:v copy`), so processing time scales with I/O, not encoding
 
 To stress test locally, record a 10–15 minute session, kill the browser mid-upload, reopen Chrome, and verify the upload resumes automatically.
+
+To test server-offline resilience: stop the backend after a Drive upload completes. The popup will show "Server unreachable — retrying automatically" on the job card. Restart the backend and within one minute the job moves to `queued` without any user action.

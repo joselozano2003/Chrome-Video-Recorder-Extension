@@ -20,7 +20,7 @@ export async function sendCompletionEmail(to, driveUrl, docUrl, recordedAt) {
   });
 
   const { error } = await resend.emails.send({
-    from: 'Acme <onboarding@resend.dev>',
+    from: `Tab Recorder <${FROM}>`,
     to,
     subject: `Your recording transcript is ready — ${date}`,
     html: `

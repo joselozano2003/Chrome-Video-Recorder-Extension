@@ -39,12 +39,14 @@ export async function createJob(recordingId, userEmail = '') {
     createdAt:      Date.now(),
     retryCount:     0,
     uploadProgress: 0,
-    sessionUri:     null,   // resumable upload session URL
-    driveFileId:    null,
-    driveFileUrl:   null,
+    sessionUri:       null,   // resumable upload session URL
+    sessionFolderId:  null,   // Drive session subfolder (recording + transcript)
+    driveFileId:      null,
+    driveFileUrl:     null,
     transcriptId:   null,
     docId:          null,
     docUrl:         null,
+    seekable:       null,
     error:          null,
   };
   jobs.push(job);
@@ -82,4 +84,19 @@ export async function getJobs() {
 export async function getJob(id) {
   const jobs = await readJobs();
   return jobs.find(j => j.id === id) ?? null;
+}
+
+/**
+ * Remove completed and failed jobs, returning their recordingIds so
+ * the caller can delete the associated blobs from IndexedDB.
+ * Active jobs (pending, uploading, uploaded, queued, transcribing) are kept.
+ * @returns {string[]} recordingIds of removed jobs
+ */
+export async function clearFinishedJobs() {
+  const jobs     = await readJobs();
+  const active   = ['pending', 'uploading', 'uploaded', 'queued', 'transcribing'];
+  const finished = jobs.filter(j => !active.includes(j.status));
+  const kept     = jobs.filter(j =>  active.includes(j.status));
+  await writeJobs(kept);
+  return finished.map(j => j.recordingId).filter(Boolean);
 }

@@ -66,8 +66,14 @@ export async function submitTranscription(audioUrl) {
  */
 export async function pollTranscription(transcriptId, onProgress) {
   const POLL_INTERVAL_MS = 5_000;
+  const MAX_POLL_MS      = 90 * 60 * 1_000; // 90 minutes — covers 2+ hour recordings
+  const startTime        = Date.now();
 
   while (true) {
+    if (Date.now() - startTime > MAX_POLL_MS) {
+      throw new Error('Transcription timed out after 90 minutes');
+    }
+
     const res = await fetch(`${BASE_URL}/transcript/${transcriptId}`, {
       headers: jsonHeaders(),
     });

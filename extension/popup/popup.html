@@ -185,6 +185,12 @@
       margin-top: 4px;
     }
 
+    .job-warning {
+      font-size: 11px;
+      color: #e0c060;
+      margin-top: 4px;
+    }
+
     .btn-retry {
       margin-top: 6px;
       padding: 4px 10px;
@@ -203,6 +209,25 @@
       text-align: center;
       padding: 20px 0;
     }
+
+    /* ── Jobs header row ── */
+    .jobs-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .btn-clear-history {
+      font-size: 10px;
+      color: #555;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+      flex: unset;
+      font-weight: 400;
+    }
+    .btn-clear-history:hover { color: #f05050; }
   </style>
 </head>
 <body>
@@ -228,14 +253,17 @@
     </label>
     <label class="toggle-label">
       <input type="checkbox" id="toggle-audio-only" />
-      Audio only
+      No video
     </label>
   </div>
 
   <div id="status">Ready</div>
   <div id="timer"></div>
 
-  <div class="section-title">Jobs</div>
+  <div class="jobs-header">
+    <div class="section-title">Jobs</div>
+    <button class="btn-clear-history" id="btn-clear-history">Clear history</button>
+  </div>
   <div id="job-list"></div>
 
   <script src="popup.js"></script>
