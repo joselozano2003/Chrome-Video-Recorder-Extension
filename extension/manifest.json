@@ -3,6 +3,7 @@
   "name": "Chrome Tab Recorder",
   "version": "1.0.0",
   "description": "Record browser tabs, transcribe audio, and create Google Docs — automatically.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAytNarGbbSqQMBh9xfryZ6wMgIT2ReaHpqCjvCy/EZLYZIMLeFMkmee0zKzyLaI0DRU0C+t7mHcukoKP/SeIsvgWrr13RIbwfhjuqFNUTVNuaf2CYH7VAzIgXLgBFKG7Rlh+K+unuHZA4iN3HWSH9ybzk9xGwAlPEyl62Qyj1kB+GKE0utXwLKISAMQc5Zu6nc9oRujIn07D9x7BWdws3HtKxbikFqNtAFVSCg2oyygd30ZA/2YQovlKKrWQ0Qa/EWpvOiXxelPC0EXp83qJEPY/BErmWk/KMiQcB41eLDJNJFbynOoSXri6svLZK0rDlQAbIOsUFulgJA4XiD26IbwIDAQAB",
 
   "permissions": [
     "tabCapture",
