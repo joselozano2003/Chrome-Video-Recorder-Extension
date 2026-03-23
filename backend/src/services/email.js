@@ -12,11 +12,11 @@ const FROM   = process.env.FROM_EMAIL || 'onboarding@resend.dev';
  * @param {string} docUrl     — Google Doc transcript URL
  * @param {string} recordedAt — ISO timestamp of recording
  */
-export async function sendCompletionEmail(to, driveUrl, docUrl, recordedAt) {
+export async function sendCompletionEmail(to, driveUrl, docUrl, recordedAt, timeZone = 'UTC') {
   console.log(`[email] Sending completion email to ${to}…`);
   const date = new Date(recordedAt).toLocaleString('en-US', {
     month: 'long', day: 'numeric', year: 'numeric',
-    hour: 'numeric', minute: '2-digit',
+    hour: 'numeric', minute: '2-digit', timeZone,
   });
 
   const { error } = await resend.emails.send({

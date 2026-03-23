@@ -9,13 +9,13 @@ const router = Router();
 // Called by the extension after a successful Drive upload.
 // Enqueues a transcription job in BullMQ.
 router.post('/', async (req, res) => {
-  const { jobId, driveFileId, sessionFolderId, userEmail, createdAt, accessToken } = req.body;
+  const { jobId, driveFileId, sessionFolderId, userEmail, createdAt, timeZone, accessToken } = req.body;
 
   if (!jobId || !driveFileId) {
     return res.status(400).json({ error: 'jobId and driveFileId are required' });
   }
 
-  const jobData = { jobId, driveFileId, sessionFolderId: sessionFolderId || null, userEmail: userEmail || '', createdAt: createdAt || Date.now(), accessToken };
+  const jobData = { jobId, driveFileId, sessionFolderId: sessionFolderId || null, userEmail: userEmail || '', createdAt: createdAt || Date.now(), timeZone: timeZone || 'UTC', accessToken };
   const jobOpts = { jobId, attempts: 3, backoff: { type: 'exponential', delay: 5_000 } };
 
   try {

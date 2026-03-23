@@ -84,11 +84,13 @@ export async function startUpload(jobId) {
 
 // ─── Chunked upload ────────────────────────────────────────────────────────────
 async function uploadChunks(jobId, blob, sessionUri, token) {
-  let offset = 0;
   let retries = 0;
 
-  // Check how much was already uploaded (resume after restart)
-  offset = await getUploadedOffset(sessionUri, blob.size);
+  // Check how much was already uploaded (resume after restart).
+  // If the upload was already completed (browser closed right after last chunk),
+  // getUploadedOffset returns the driveFileId directly — don't re-upload.
+  let { offset, driveFileId: resumeId } = await getUploadedOffset(sessionUri, blob.size);
+  if (resumeId) return resumeId;
 
   while (offset < blob.size) {
     const end   = Math.min(offset + CHUNK_SIZE, blob.size);
@@ -122,8 +124,10 @@ async function uploadChunks(jobId, blob, sessionUri, token) {
         await sleep(delay);
       }
 
-      // Find actual offset from server before retrying
-      offset = await getUploadedOffset(sessionUri, blob.size);
+      // Re-check offset; Drive may have already received the last chunk
+      const resume = await getUploadedOffset(sessionUri, blob.size);
+      if (resume.driveFileId) return resume.driveFileId;
+      offset = resume.offset;
       retries++;
     }
   }
@@ -168,14 +172,20 @@ async function getUploadedOffset(sessionUri, totalSize) {
     },
   });
 
-  if (res.status === 200 || res.status === 201) return totalSize; // already done
+  if (res.status === 200 || res.status === 201) {
+    // Upload already complete — extract the file ID so the caller can skip re-uploading.
+    // This happens when the browser was closed after the last chunk landed but before
+    // the driveFileId was persisted to storage.
+    const data = await res.json();
+    return { offset: totalSize, driveFileId: data.id };
+  }
   if (res.status === 308) {
     const range = res.headers.get('Range');
-    if (!range) return 0;
+    if (!range) return { offset: 0 };
     const match = range.match(/bytes=0-(\d+)/);
-    return match ? parseInt(match[1], 10) + 1 : 0;
+    return { offset: match ? parseInt(match[1], 10) + 1 : 0 };
   }
-  return 0;
+  return { offset: 0 };
 }
 
 // ─── Session initiation ────────────────────────────────────────────────────────
@@ -321,6 +331,7 @@ async function notifyBackend(job) {
         sessionFolderId: job.sessionFolderId || null,
         userEmail:       job.userEmail || '',
         createdAt:       job.createdAt,
+        timeZone:        Intl.DateTimeFormat().resolvedOptions().timeZone,
         accessToken,
       }),
     });

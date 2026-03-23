@@ -12,7 +12,7 @@ const DOCS_BASE  = 'https://docs.googleapis.com/v1/documents';
  * @param {string} accessToken    — Google OAuth token with documents scope
  * @returns {{ docId: string, docUrl: string }}
  */
-export async function createTranscriptDoc(title, recordingDate, driveUrl, transcriptText, utterances = [], accessToken, sessionFolderId = null) {
+export async function createTranscriptDoc(title, recordingDate, driveUrl, transcriptText, utterances = [], accessToken, sessionFolderId = null, timeZone = 'UTC') {
   const authHeader = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
 
   // Step 1: Create the empty document
@@ -27,7 +27,7 @@ export async function createTranscriptDoc(title, recordingDate, driveUrl, transc
   const { documentId } = await createRes.json();
 
   // Step 2: Build the document body as plain text
-  const body = buildBody(recordingDate, driveUrl, transcriptText, utterances);
+  const body = buildBody(recordingDate, driveUrl, transcriptText, utterances, timeZone);
 
   // Step 3: Insert the text content via batchUpdate
   const updateRes = await fetch(`${DOCS_BASE}/${documentId}:batchUpdate`, {
@@ -63,9 +63,9 @@ export async function createTranscriptDoc(title, recordingDate, driveUrl, transc
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function buildBody(recordingDate, driveUrl, transcriptText, utterances) {
+function buildBody(recordingDate, driveUrl, transcriptText, utterances, timeZone = 'UTC') {
   const date = new Date(recordingDate).toLocaleString('en-US', {
-    dateStyle: 'long', timeStyle: 'short',
+    dateStyle: 'long', timeStyle: 'short', timeZone,
   });
 
   let body = `Recording: ${date}\nDrive file: ${driveUrl}\n\n`;

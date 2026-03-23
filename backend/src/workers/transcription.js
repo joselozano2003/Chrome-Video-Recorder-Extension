@@ -40,7 +40,7 @@ export const transcriptionQueue = new Queue('transcription', { connection });
 
 // ─── Worker ───────────────────────────────────────────────────────────────────
 const worker = new Worker('transcription', async (job) => {
-  const { jobId, driveFileId, sessionFolderId, accessToken, userEmail, createdAt } = job.data;
+  const { jobId, driveFileId, sessionFolderId, accessToken, userEmail, createdAt, timeZone = 'UTC' } = job.data;
   console.log(`[worker] Processing job ${jobId} (driveFileId: ${driveFileId})`);
 
   // ── Step 1: Download audio from Google Drive ───────────────────────────────
@@ -118,7 +118,7 @@ const worker = new Worker('transcription', async (job) => {
   // ── Step 5: Create Google Doc with transcript ─────────────────────────────
   await job.updateProgress(80);
   const recordingDate = new Date(createdAt);
-  const title = `Transcript — ${recordingDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  const title = `Transcript — ${recordingDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone })}`;
   const driveUrl = `https://drive.google.com/file/d/${driveFileId}/view`;
 
   const { docId, docUrl } = await createTranscriptDoc(
@@ -129,6 +129,7 @@ const worker = new Worker('transcription', async (job) => {
     utterances,
     accessToken,
     sessionFolderId,
+    timeZone,
   );
   console.log(`[worker] Google Doc created: ${docUrl}`);
 
@@ -140,7 +141,7 @@ const worker = new Worker('transcription', async (job) => {
     let emailSent = false;
     for (let attempt = 1; attempt <= EMAIL_ATTEMPTS; attempt++) {
       try {
-        await sendCompletionEmail(recipient, driveUrl, docUrl, recordingDate.toISOString());
+        await sendCompletionEmail(recipient, driveUrl, docUrl, recordingDate.toISOString(), timeZone);
         console.log(`[worker] Email sent to ${recipient}`);
         emailSent = true;
         break;
