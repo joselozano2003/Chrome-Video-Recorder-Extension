@@ -101,7 +101,7 @@ docker compose up --build
 | Live URL | `https://recorder-backend-409823534577.us-central1.run.app` |
 | Min instances | 0 (scales to zero when idle, ~1–2s cold start) |
 | Max instances | 2 |
-| Memory | 512Mi |
+| Memory | 1Gi |
 
 ### Redis in production — Upstash
 

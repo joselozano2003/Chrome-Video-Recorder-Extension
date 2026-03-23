@@ -171,17 +171,22 @@ The same architecture could be swapped for Cloud Tasks with minimal changes to t
 ### Worker pipeline
 
 ```
-1. Download recording from Google Drive
-2. FFmpeg remux: WebM → MP4 (-c:v copy -c:a aac)
-   - Adds Duration element and seek index (Cues)
-   - Replaces Drive file content in-place, renames to .mp4
-3. Upload audio/video buffer to AssemblyAI (returns a hosted URL)
-4. Submit transcription (speaker_labels: true, model: universal-2)
-5. Poll AssemblyAI every 5s until complete (90-minute cap)
-6. Create Google Doc titled "Transcript — {date in user's timezone}"
+1. Stream recording from Google Drive directly to a temp file on disk (no RAM buffer)
+2. Single FFmpeg pass — two outputs, both written to disk:
+   a. Full MP4 (-c:v copy -c:a aac) — adds Duration + seek index, for Drive
+   b. Audio-only AAC (-vn -b:a 128k) — for AssemblyAI (~5–10x smaller than full video)
+   Note: the browser's MediaRecorder API can only output WebM; the remux step is
+   required by this browser limitation, not by design choice.
+3. Upload MP4 to Drive via resumable chunked upload (10 MB chunks, no file size limit)
+   - Replaces the original WebM in-place, renames to .mp4
+4. Stream audio-only file to AssemblyAI (returns a hosted URL)
+5. Submit transcription (speaker_labels: true, model: universal-2)
+6. Poll AssemblyAI every 5s until complete (90-minute cap)
+7. Create Google Doc titled "Transcript — {date in user's timezone}"
    - Moved into the session subfolder alongside the recording
-7. Send completion email via Resend (3 attempts, 5s delay between, never fails the job)
-8. Return { transcriptId, docId, docUrl, seekable } as BullMQ job result
+8. Send completion email via Resend (3 attempts, 5s delay between, never fails the job)
+9. Clean up all temp files (input WebM, MP4, audio) in a finally block
+10. Return { transcriptId, docId, docUrl, seekable } as BullMQ job result
 ```
 
 Each step is sequential within the worker. BullMQ retries the entire job up to 3 times with exponential backoff if any step throws.
@@ -248,7 +253,10 @@ Chrome notifications (via `chrome.notifications`) fire on both completion and fa
 | Upload size | Google Drive resumable upload; no size limit |
 | Upload interrupted mid-chunk | Session URI persisted; resumes from last confirmed byte |
 | Upload already complete on resume | Drive returns 200/201 with file ID; extracted directly, no re-upload |
-| FFmpeg memory | Stream-copy (`-c:v copy`); no re-encode; I/O-bound not CPU-bound |
+| Backend download memory | Drive response streamed directly to disk — no in-memory buffer regardless of file size |
+| FFmpeg memory | Single pass, two file outputs on disk (MP4 + audio-only AAC); no large buffers in RAM |
+| Backend Drive re-upload | Resumable chunked upload (10 MB chunks) — replaces the 5 MB simple upload limit |
+| AssemblyAI upload size | Audio-only AAC sent (~50–150 MB for 2 hrs) instead of full video (500 MB+) |
 | FFmpeg unavailable | Falls back to original .webm; `seekable: false` flag stored; popup shows a warning |
 | Transcription length | AssemblyAI handles multi-hour files natively |
 | Transcription hung | 90-minute polling cap; BullMQ retries up to 3 times |
@@ -266,6 +274,6 @@ Chrome notifications (via `chrome.notifications`) fire on both completion and fa
 ## Scaling Considerations
 
 - **Multiple workers**: BullMQ supports concurrent workers. Running `N` worker processes handles `N` jobs in parallel. Redis is the coordination point.
-- **Backend statelessness**: the Node.js server holds no in-memory state; any number of instances can share the same Redis.
+- **Backend statelessness**: the Node.js server holds no in-memory state; any number of instances can share the same Redis. Cloud Run is configured with 1 Gi memory to provide headroom for FFmpeg and concurrent jobs.
 - **Drive quota**: the extension uses `drive.file` scope (access only to files it created), keeping the OAuth footprint minimal. Large uploads count against the user's Drive quota, not a service account.
 - **AssemblyAI rate limits**: the free tier allows ~5 concurrent transcriptions. For higher throughput, the BullMQ concurrency setting should be adjusted to match the account's limit.

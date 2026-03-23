@@ -9,19 +9,22 @@ const jsonHeaders = () => ({
 });
 
 /**
- * Upload an audio buffer to AssemblyAI's servers.
- * Returns an AssemblyAI-hosted URL that can be used for transcription.
- * @param {Buffer} buffer
+ * Upload an audio file to AssemblyAI's servers by streaming from disk.
+ * Avoids loading the entire file into memory — safe for large recordings.
+ * @param {string} filePath — absolute path to the audio file
  * @returns {string} upload_url
  */
-export async function uploadAudio(buffer) {
+export async function uploadAudioFile(filePath) {
+  const { createReadStream } = await import('fs');
+
   const res = await fetch(`${BASE_URL}/upload`, {
     method: 'POST',
     headers: {
       authorization: API_KEY(),
       'content-type': 'application/octet-stream',
     },
-    body: buffer,
+    body: createReadStream(filePath),
+    duplex: 'half', // required for streaming request bodies in Node 18+
   });
 
   if (!res.ok) {
