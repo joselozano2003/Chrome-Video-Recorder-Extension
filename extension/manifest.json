@@ -20,7 +20,8 @@
     "https://www.googleapis.com/*",
     "https://api.assemblyai.com/*",
     "http://localhost:3000/*",
-    "https://*.app.github.dev/*"
+    "https://*.app.github.dev/*",
+    "https://recorder-backend-409823534577.us-central1.run.app/*"
   ],
 
   "oauth2": {

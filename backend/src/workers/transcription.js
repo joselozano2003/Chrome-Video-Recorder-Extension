@@ -29,22 +29,44 @@ async function remuxToMp4(inputBuffer) {
 }
 
 // ─── Redis connection ──────────────────────────────────────────────────────────
-const connection = new IORedis({
+const redisOpts = {
   host: process.env.REDIS_HOST || 'localhost',
   port: parseInt(process.env.REDIS_PORT || '6379', 10),
-  maxRetriesPerRequest: null, // required by BullMQ
+  ...(process.env.REDIS_PASSWORD && { password: process.env.REDIS_PASSWORD }),
+  ...(process.env.REDIS_TLS === 'true' && { tls: {} }),
+  maxRetriesPerRequest: null,    // required by BullMQ
+  keepAlive: 10000,              // send TCP keepalive every 10s
+  retryStrategy: (times) => Math.min(times * 200, 5000),
+};
+
+// Queue and Worker get independent connections so reconnects don't interfere
+const queueConnection  = new IORedis(redisOpts);
+const workerConnection = new IORedis(redisOpts);
+
+const TRANSIENT_CODES = new Set(['ECONNRESET', 'EPIPE', 'ECONNREFUSED']);
+
+queueConnection.on('connect', () => console.log('[redis] Queue connection established'));
+queueConnection.on('error', (err) => {
+  if (TRANSIENT_CODES.has(err.code)) return; // ioredis reconnects automatically
+  console.error('[redis] Queue connection error:', err.message);
+});
+workerConnection.on('error', (err) => {
+  if (TRANSIENT_CODES.has(err.code)) return;
+  console.error('[redis] Worker connection error:', err.message);
 });
 
 // ─── Queue ────────────────────────────────────────────────────────────────────
-export const transcriptionQueue = new Queue('transcription', { connection });
+export const transcriptionQueue = new Queue('transcription', { connection: queueConnection });
 
 // ─── Worker ───────────────────────────────────────────────────────────────────
+const progress = (job, pct) => job.updateProgress(pct).catch(() => {}); // never fatal
+
 const worker = new Worker('transcription', async (job) => {
   const { jobId, driveFileId, sessionFolderId, accessToken, userEmail, createdAt, timeZone = 'UTC' } = job.data;
   console.log(`[worker] Processing job ${jobId} (driveFileId: ${driveFileId})`);
 
   // ── Step 1: Download audio from Google Drive ───────────────────────────────
-  await job.updateProgress(10);
+  await progress(job, 10);
   console.log(`[worker] Downloading from Drive…`);
 
   const driveRes = await fetch(
@@ -94,19 +116,19 @@ const worker = new Worker('transcription', async (job) => {
   }
 
   // ── Step 2: Upload to AssemblyAI (get a hosted URL) ───────────────────────
-  await job.updateProgress(25);
+  await progress(job, 25);
   console.log(`[worker] Uploading to AssemblyAI…`);
 
   const assemblyUrl = await uploadAudio(audioBuffer);
   console.log(`[worker] AssemblyAI upload URL received`);
 
   // ── Step 3: Submit for transcription ──────────────────────────────────────
-  await job.updateProgress(35);
+  await progress(job, 35);
   const transcriptId = await submitTranscription(assemblyUrl);
   console.log(`[worker] Transcription submitted: ${transcriptId}`);
 
   // ── Step 4: Poll until complete ────────────────────────────────────────────
-  await job.updateProgress(40);
+  await progress(job, 40);
   console.log(`[worker] Polling transcription…`);
 
   const { text, utterances } = await pollTranscription(transcriptId, (status) => {
@@ -116,7 +138,7 @@ const worker = new Worker('transcription', async (job) => {
   console.log(`[worker] Transcription complete — ${text.length} chars, ${utterances.length} utterances`);
 
   // ── Step 5: Create Google Doc with transcript ─────────────────────────────
-  await job.updateProgress(80);
+  await progress(job, 80);
   const recordingDate = new Date(createdAt);
   const title = `Transcript — ${recordingDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone })}`;
   const driveUrl = `https://drive.google.com/file/d/${driveFileId}/view`;
@@ -155,11 +177,11 @@ const worker = new Worker('transcription', async (job) => {
     console.warn(`[worker] No recipient email — set NOTIFY_EMAIL in .env`);
   }
 
-  await job.updateProgress(100);
+  await progress(job, 100);
 
   return { status: 'completed', jobId, transcriptId, charCount: text.length, docId, docUrl, seekable };
 }, {
-  connection,
+  connection: workerConnection,
   concurrency: 2,
   lockDuration: 7_200_000, // 2-hour lock — transcription polling can take a while
 });
@@ -173,5 +195,6 @@ worker.on('failed', (job, err) => {
 });
 
 worker.on('error', (err) => {
+  if (TRANSIENT_CODES.has(err.code)) return; // ioredis reconnects automatically
   console.error('[worker] Worker error:', err);
 });
