@@ -24,7 +24,7 @@
   ],
 
   "oauth2": {
-    "client_id": "409823534577-ekfht6m6ri59s9880j7mi9rtqhasr1nq.apps.googleusercontent.com",
+    "client_id": "409823534577-65v11l13fnhud8mtn777a2jf8v9nlgfp.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/drive.file",
       "https://www.googleapis.com/auth/documents"
