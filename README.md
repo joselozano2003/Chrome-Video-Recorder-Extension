@@ -10,7 +10,7 @@ A Chrome extension that records browser tabs, automatically uploads recordings t
 - Chunked recording streamed to IndexedDB — flat memory usage for long recordings
 - Resumable Google Drive upload with automatic retry on failure
 - Recordings organised into per-session folders inside a root **Tab Recordings** Drive folder
-- Backend transcription pipeline: FFmpeg remux → AssemblyAI → Google Doc
+- Backend transcription pipeline: AssemblyAI → Google Doc
 - Email notification with links to the recording and transcript
 - Job queue visible in the extension popup with live status updates
 - **Server-offline resilience**: if the backend is unreachable after a Drive upload, the popup shows the error and automatically retries every minute via `chrome.alarms` — no recordings are lost
@@ -24,13 +24,14 @@ Chrome Extension                           Backend (Node.js)
 ────────────────                           ─────────────────
 offscreen.js                               BullMQ Worker
   └─ MediaRecorder (H.264/VP8, 1440p)        └─ Download from Drive
-  └─ 1s chunks → IndexedDB                   └─ FFmpeg: WebM → MP4
-  └─ Assemble blob on stop                   └─ AssemblyAI transcription
+  └─ 1s chunks → IndexedDB                   └─ AssemblyAI transcription (WebM/Opus)
+  └─ Assemble blob on stop                   └─ Create Google Doc
                                              └─ Create Google Doc
 background.js  (service worker)             └─ Send email (Resend)
   └─ Google OAuth (chrome.identity)
   └─ Resumable Drive upload              Redis
-  └─ POST /jobs → backend                  └─ BullMQ job persistence
+  └─ POST /jobs → backend              Redis
+  └─ chrome.alarms → poll every 1 min    └─ BullMQ job persistence
   └─ chrome.alarms → poll every 1 min
 
 popup.js
@@ -46,9 +47,6 @@ MediaRecorder runs with a 1-second timeslice. Each chunk is written to IndexedDB
 
 **Resumable uploads**
 Google Drive resumable upload sessions are persisted to `chrome.storage.local`. If the browser is closed mid-upload, the session URI is reused and the upload resumes from the last confirmed byte on next startup.
-
-**Seekable output**
-Chrome's MediaRecorder omits the WebM Duration element. The backend remuxes the recording from WebM to MP4 using FFmpeg (`-c:v copy -c:a aac`), which adds a proper duration and seek index. The Drive file is replaced in-place and renamed to `.mp4`.
 
 **Idempotency**
 BullMQ jobs are keyed by the extension's job ID. Re-queuing the same job is a no-op. Drive uploads check the resumable session before starting a new one.
@@ -71,7 +69,6 @@ A `recordingInProgress` flag in `chrome.storage.local` acts as a mutex. A second
 
 - Node.js 20+
 - Docker (for Redis)
-- FFmpeg installed and on `PATH`
 - Chrome 116+
 
 ---
@@ -181,19 +178,7 @@ The extension will now send jobs to the Codespaces backend. Note that the forwar
 
 ## Environment Variables
 
-| Variable | Description |
-|---|---|
-| `PORT` | Backend port (default: `3000`) |
-| `REDIS_HOST` | Redis host (default: `localhost`) |
-| `REDIS_PORT` | Redis port (default: `6379`) |
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
-| `GOOGLE_REDIRECT_URI` | OAuth redirect URI (default: `http://localhost:3000/auth/callback`) |
-| `ASSEMBLYAI_API_KEY` | AssemblyAI API key |
-| `RESEND_API_KEY` | Resend API key |
-| `NOTIFY_EMAIL` | Fallback recipient email for notifications |
-| `ADMIN_USER` | BullMQ dashboard username (default: `admin`) |
-| `ADMIN_PASS` | BullMQ dashboard password (default: `admin`) |
+Copy `backend/.env.example` to `backend/.env` and fill in the values. See [`backend/README.md`](./backend/README.md#environment-variables) for the full reference including production/Upstash-specific variables.
 
 ---
 
@@ -216,7 +201,7 @@ Recorder/
     │   ├── server.js        # Express entry point + BullMQ dashboard
     │   ├── routes/jobs.js   # POST /jobs, GET /jobs/:id
     │   ├── workers/
-    │   │   └── transcription.js  # BullMQ worker: FFmpeg, AssemblyAI, Docs, email
+    │   │   └── transcription.js  # BullMQ worker: AssemblyAI, Docs, email
     │   └── services/
     │       ├── assemblyai.js     # Upload + poll transcription
     │       ├── googledocs.js     # Create transcript Google Doc
@@ -236,7 +221,7 @@ Recorder/
 | Video bitrate | 1 Mbps |
 | Video codec | H.264 (hardware-accelerated), VP8 fallback |
 | Audio codec | Opus |
-| Output format | MP4 (remuxed by backend FFmpeg) |
+| Output format | WebM (stored as-is in Drive; natively supported by AssemblyAI) |
 
 ---
 
@@ -248,7 +233,6 @@ Validated with a **2-hour 1440p recording**:
 |---|---|
 | Memory during recording | Heap stayed flat — ~7,200 chunks written to IndexedDB, not RAM |
 | Upload interrupted | Closed Chrome mid-upload; reopened and resumed from the exact byte offset |
-| FFmpeg remux | Completed in under 30 seconds (stream-copy, not re-encode) |
 | AssemblyAI transcription | Returned in ~18 minutes |
 | End-to-end | Recording stop → email received in ~20 minutes |
 
