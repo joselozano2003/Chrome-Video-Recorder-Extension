@@ -14,17 +14,14 @@ const jsonHeaders = () => ({
  * @param {string} filePath — absolute path to the audio file
  * @returns {string} upload_url
  */
-export async function uploadAudioFile(filePath) {
-  const { createReadStream } = await import('fs');
-
+export async function uploadAudioFile(buffer) {
   const res = await fetch(`${BASE_URL}/upload`, {
     method: 'POST',
     headers: {
       authorization: API_KEY(),
       'content-type': 'application/octet-stream',
     },
-    body: createReadStream(filePath),
-    duplex: 'half', // required for streaming request bodies in Node 18+
+    body: buffer,
   });
 
   if (!res.ok) {

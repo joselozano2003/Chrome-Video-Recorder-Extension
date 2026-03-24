@@ -17,41 +17,30 @@ Node.js/Express backend for the Recorder Chrome extension. Receives transcriptio
 **Stack:** Express 5, BullMQ 5, ioredis, fluent-ffmpeg, googleapis, AssemblyAI, Resend
 **Runtime:** Node 20, ESM modules (`"type": "module"`)
 
+### Large recording support
+
+The worker is designed to handle recordings of any length (tested to 2 hours) without running out of memory:
+
+| Stage | Approach |
+|---|---|
+| Drive download | Streamed directly to a temp file on disk — never buffered in RAM |
+| FFmpeg | Single pass, two outputs on disk: full MP4 (for Drive) + audio-only AAC (for AssemblyAI) |
+| Drive re-upload | Resumable chunked upload (10 MB chunks) — no 5 MB size limit |
+| AssemblyAI upload | Audio-only file streamed from disk (~50–150 MB for 2 hrs vs 500 MB+ for full video) |
+| Temp file cleanup | All temp files deleted in a `finally` block regardless of success or failure |
+
+Peak RAM is ~10 MB (one upload chunk) + Node/Express overhead, flat regardless of recording length. The browser's MediaRecorder API can only output WebM — the remux step is required by this browser limitation, not by design choice.
+
 ---
 
 ## Local Development
 
-### Prerequisites
-- Node 20+
-- Docker (for local Redis)
+See the root [`README.md`](../README.md#quick-start) for the full quick start. Backend-specific notes:
 
-### Steps
-
-```bash
-# 1. Install dependencies
-npm install
-
-# 2. Create your local env file
-cp .env.example .env
-# Fill in GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ASSEMBLYAI_API_KEY, RESEND_API_KEY, NOTIFY_EMAIL
-# Leave REDIS_HOST=localhost, REDIS_PORT=6379 — Docker Compose provides Redis
-
-# 3. Start Redis
-docker compose up redis -d
-
-# 4. Start the server with hot reload
-npm run dev
-```
-
-Server starts at `http://localhost:3000`.
-BullMQ dashboard: `http://localhost:3000/admin` (default credentials: `admin` / `admin`).
-Health check: `http://localhost:3000/health`
-
-### Running everything with Docker Compose
-
-```bash
-docker compose up --build
-```
+- **Hot reload**: run Redis separately (`docker compose up redis -d`), then `npm run dev` in a separate terminal.
+- **All-in-one**: `docker compose up --build` starts both Redis and the backend.
+- Server: `http://localhost:3000` · Dashboard: `http://localhost:3000/admin` · Health: `http://localhost:3000/health`
+- Leave `REDIS_HOST=localhost`, `REDIS_PORT=6379`, and unset `REDIS_PASSWORD`/`REDIS_TLS` for local dev.
 
 ---
 
