@@ -70,13 +70,12 @@ function buildBody(recordingDate, driveUrl, transcriptText, utterances, timeZone
 
   let body = `Recording: ${date}\nDrive file: ${driveUrl}\n\n`;
 
+  body += '── Transcript ──\n\n';
   if (utterances.length > 0) {
-    body += '── Transcript ──\n\n';
     for (const u of utterances) {
       body += `Speaker ${u.speaker} [${formatTime(u.start)}]  ${u.text}\n\n`;
     }
   } else {
-    body += '── Transcript ──\n\n';
     body += transcriptText;
   }
 

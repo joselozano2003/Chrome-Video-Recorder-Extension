@@ -7,29 +7,18 @@ Node.js/Express backend for the Recorder Chrome extension. Receives transcriptio
 1. Extension uploads a WebM recording to Google Drive, then POSTs a job to `POST /jobs`.
 2. The server enqueues the job in BullMQ (backed by Redis/Upstash in production).
 3. The worker:
-   - Downloads the file from Google Drive
-   - Remuxes WebM → MP4 via FFmpeg (adds seek index, renames the Drive file)
-   - Uploads audio to AssemblyAI and polls until the transcript is ready
+   - Downloads the WebM from Google Drive
+   - Uploads it directly to AssemblyAI and polls until the transcript is ready
    - Creates a Google Doc in the user's Drive session folder
    - Sends a completion email via Resend
 4. The extension polls `GET /jobs/:jobId` to track progress.
 
-**Stack:** Express 5, BullMQ 5, ioredis, fluent-ffmpeg, googleapis, AssemblyAI, Resend
+**Stack:** Express 5, BullMQ 5, ioredis, AssemblyAI, Resend
 **Runtime:** Node 20, ESM modules (`"type": "module"`)
 
-### Large recording support
+### Recording format
 
-The worker is designed to handle recordings of any length (tested to 2 hours) without running out of memory:
-
-| Stage | Approach |
-|---|---|
-| Drive download | Streamed directly to a temp file on disk — never buffered in RAM |
-| FFmpeg | Single pass, two outputs on disk: full MP4 (for Drive) + audio-only AAC (for AssemblyAI) |
-| Drive re-upload | Resumable chunked upload (10 MB chunks) — no 5 MB size limit |
-| AssemblyAI upload | Audio-only file streamed from disk (~50–150 MB for 2 hrs vs 500 MB+ for full video) |
-| Temp file cleanup | All temp files deleted in a `finally` block regardless of success or failure |
-
-Peak RAM is ~10 MB (one upload chunk) + Node/Express overhead, flat regardless of recording length. The browser's MediaRecorder API can only output WebM — the remux step is required by this browser limitation, not by design choice.
+The extension records in WebM (the only format the browser's MediaRecorder API can produce). The backend uploads WebM directly to AssemblyAI, which natively supports WebM/Opus — no conversion step. The WebM file is also stored as-is in Google Drive.
 
 ---
 

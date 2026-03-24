@@ -9,9 +9,8 @@ const jsonHeaders = () => ({
 });
 
 /**
- * Upload an audio file to AssemblyAI's servers by streaming from disk.
- * Avoids loading the entire file into memory — safe for large recordings.
- * @param {string} filePath — absolute path to the audio file
+ * Upload an audio/video buffer to AssemblyAI's servers.
+ * @param {Buffer} buffer — file contents (WebM, MP4, etc.)
  * @returns {string} upload_url
  */
 export async function uploadAudioFile(buffer) {
@@ -43,9 +42,9 @@ export async function submitTranscription(audioUrl) {
     method: 'POST',
     headers: jsonHeaders(),
     body: JSON.stringify({
-      audio_url:      audioUrl,
+      audio_url:    audioUrl,
       speaker_labels: true,
-      speech_models:  ['universal-2'],
+      speech_model: 'universal-2',
     }),
   });
 
