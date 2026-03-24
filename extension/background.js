@@ -126,6 +126,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       pollBackendJobs().then(() => sendResponse({ success: true }));
       return true;
 
+    case 'mic-denied':
+      notify('Microphone unavailable', 'Recording continuing without mic — microphone access was denied.');
+      break;
+
     case 'clear-history':
       clearFinishedJobs().then(async (recordingIds) => {
         // Delete blobs from IndexedDB for all removed jobs

@@ -89,6 +89,7 @@ async function startRecording(streamId, options = {}) {
       console.log('[offscreen] Mic mixed in');
     } catch (err) {
       console.warn('[offscreen] Mic access denied:', err.message);
+      chrome.runtime.sendMessage({ type: 'mic-denied' });
     }
   }
 
@@ -155,6 +156,11 @@ async function stopRecording() {
         const durationMs  = Date.now() - recordingStartMs;
         activeRecordingId = null;
         recordingStartMs  = 0;
+
+        if (durationMs < 3000) {
+          throw new Error('Recording too short (minimum 3 seconds)');
+        }
+
         await assembleAndSave(recordingId);
         console.log(`[offscreen] Assembled recording ${recordingId} (${Math.round(durationMs / 1000)}s)`);
 

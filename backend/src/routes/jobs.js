@@ -11,8 +11,8 @@ const router = Router();
 router.post('/', async (req, res) => {
   const { jobId, driveFileId, sessionFolderId, userEmail, createdAt, timeZone, accessToken } = req.body;
 
-  if (!jobId || !driveFileId) {
-    return res.status(400).json({ error: 'jobId and driveFileId are required' });
+  if (!jobId || !driveFileId || !accessToken) {
+    return res.status(400).json({ error: 'jobId, driveFileId, and accessToken are required' });
   }
 
   const jobData = { jobId, driveFileId, sessionFolderId: sessionFolderId || null, userEmail: userEmail || '', createdAt: createdAt || Date.now(), timeZone: timeZone || 'UTC', accessToken };

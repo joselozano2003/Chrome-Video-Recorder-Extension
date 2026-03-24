@@ -324,6 +324,7 @@ async function notifyBackend(job) {
 
     const res = await fetch(`${BACKEND_URL}/jobs`, {
       method: 'POST',
+      signal: AbortSignal.timeout(30_000),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         jobId:           job.id,
