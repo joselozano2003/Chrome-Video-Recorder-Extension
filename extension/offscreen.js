@@ -112,7 +112,8 @@ async function startRecording(streamId, options = {}) {
 
   mediaRecorder = new MediaRecorder(finalStream, {
     mimeType,
-    videoBitsPerSecond: 1_000_000,
+    videoBitsPerSecond: 3_000_000,
+    audioBitsPerSecond: 192_000,
   });
 
   mediaRecorder.ondataavailable = (e) => {
