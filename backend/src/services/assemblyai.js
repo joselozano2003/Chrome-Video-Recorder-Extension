@@ -42,9 +42,9 @@ export async function submitTranscription(audioUrl) {
     method: 'POST',
     headers: jsonHeaders(),
     body: JSON.stringify({
-      audio_url:    audioUrl,
+      audio_url:      audioUrl,
       speaker_labels: true,
-      speech_model: 'universal-2',
+      speech_models:  ['universal-2'],
     }),
   });
 
