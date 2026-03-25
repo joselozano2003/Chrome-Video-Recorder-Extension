@@ -49,21 +49,24 @@ const worker = new Worker('transcription', async (job) => {
 
   const driveRes = await fetch(
     `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,
-    { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(10 * 60 * 1000) }
+    { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(20 * 60 * 1000) }
   );
 
   if (!driveRes.ok) {
     throw new Error(`Drive download failed: ${driveRes.status} ${await driveRes.text()}`);
   }
 
-  const audioBuffer = Buffer.from(await driveRes.arrayBuffer());
-  console.log(`[worker] Downloaded ${(audioBuffer.length / 1024 / 1024).toFixed(1)} MB`);
+  const contentLength = driveRes.headers.get('content-length');
+  if (contentLength) {
+    console.log(`[worker] Streaming ${(parseInt(contentLength) / 1024 / 1024).toFixed(1)} MB Drive → AssemblyAI`);
+  }
 
   // ── Step 2: Upload to AssemblyAI ──────────────────────────────────────────
+  // Stream the Drive response body directly — no in-memory buffer regardless of file size.
   await progress(job, 30);
   console.log(`[worker] Uploading to AssemblyAI…`);
 
-  const assemblyUrl = await uploadAudioFile(audioBuffer);
+  const assemblyUrl = await uploadAudioFile(driveRes.body, contentLength);
   console.log(`[worker] AssemblyAI upload complete`);
 
   // ── Step 3: Submit for transcription ──────────────────────────────────────

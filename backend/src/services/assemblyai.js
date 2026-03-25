@@ -9,18 +9,23 @@ const jsonHeaders = () => ({
 });
 
 /**
- * Upload an audio/video buffer to AssemblyAI's servers.
- * @param {Buffer} buffer — file contents (WebM, MP4, etc.)
+ * Stream an audio/video file to AssemblyAI without buffering it in memory.
+ * @param {ReadableStream} stream — response body from a Drive fetch
+ * @param {string|null}    contentLength — Content-Length header value if known
  * @returns {string} upload_url
  */
-export async function uploadAudioFile(buffer) {
+export async function uploadAudioFile(stream, contentLength = null) {
+  const headers = {
+    authorization: API_KEY(),
+    'content-type': 'application/octet-stream',
+  };
+  if (contentLength) headers['content-length'] = contentLength;
+
   const res = await fetch(`${BASE_URL}/upload`, {
     method: 'POST',
-    headers: {
-      authorization: API_KEY(),
-      'content-type': 'application/octet-stream',
-    },
-    body: buffer,
+    headers,
+    body: stream,
+    duplex: 'half', // required by Node.js for streaming request bodies
   });
 
   if (!res.ok) {
